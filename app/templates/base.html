@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Video Downloader{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/">Video Downloader</a>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/" class="{% if request.endpoint == 'main.index' %}active{% endif %}">Dashboard</a></li>
+            <li><a href="/channels" class="{% if request.endpoint == 'main.channels_list' %}active{% endif %}">Channels</a></li>
+            <li><a href="/videos" class="{% if request.endpoint == 'main.videos_list' %}active{% endif %}">Videos</a></li>
+            <li><a href="/logs" class="{% if request.endpoint == 'main.logs_list' %}active{% endif %}">Logs</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

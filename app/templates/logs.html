@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Video Downloader{% endblock %}
+
+{% block content %}
+<h1>Download Logs</h1>
+
+<div class="logs-list">
+    {% for log in logs %}
+    <div class="log-entry log-{{ log.action }}">
+        <div class="log-time">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</div>
+        <div class="log-action">
+            <span class="action-badge action-{{ log.action }}">{{ log.action }}</span>
+        </div>
+        <div class="log-message">{{ log.message }}</div>
+    </div>
+    {% else %}
+    <p class="empty-message">No logs yet.</p>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Videos - Video Downloader{% endblock %}
+
+{% block content %}
+<h1>Videos</h1>
+
+<div class="filter-bar">
+    <a href="/videos?status=all" class="filter-btn {% if status == 'all' %}active{% endif %}">All</a>
+    <a href="/videos?status=pending" class="filter-btn {% if status == 'pending' %}active{% endif %}">Pending</a>
+    <a href="/videos?status=downloading" class="filter-btn {% if status == 'downloading' %}active{% endif %}">Downloading</a>
+    <a href="/videos?status=completed" class="filter-btn {% if status == 'completed' %}active{% endif %}">Completed</a>
+    <a href="/videos?status=failed" class="filter-btn {% if status == 'failed' %}active{% endif %}">Failed</a>
+    <a href="/videos?status=skipped" class="filter-btn {% if status == 'skipped' %}active{% endif %}">Skipped</a>
+</div>
+
+<div class="videos-table">
+    <table>
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Channel</th>
+                <th>Duration</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for video in videos %}
+            <tr data-id="{{ video.id }}">
+                <td class="title-cell">
+                    <div class="video-title">{{ video.title or video.video_id }}</div>
+                    {% if video.is_clip %}
+                    <span class="badge badge-clip">Clip</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="/channel/{{ video.channel_id }}">{{ video.channel.name }}</a>
+                </td>
+                <td>{{ video.duration_formatted or '-' }}</td>
+                <td>
+                    <span class="status-badge status-{{ video.status }}">{{ video.status }}</span>
+                    {% if video.error_message %}
+                    <span class="error-hint" title="{{ video.error_message }}">!</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if video.status in ['pending', 'failed', 'skipped'] %}
+                    <button class="btn btn-sm btn-primary" onclick="downloadVideo({{ video.id }})">Download</button>
+                    {% endif %}
+                    {% if video.status == 'pending' %}
+                    <button class="btn btn-sm btn-secondary" onclick="skipVideo({{ video.id }})">Skip</button>
+                    {% endif %}
+                    {% if video.status == 'completed' and video.file_path %}
+                    <span class="file-info" title="{{ video.file_path }}">{{ video.file_size_formatted }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="empty-message">No videos found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function downloadVideo(id) {
+    try {
+        await fetch(`/api/videos/${id}/download`, {method: 'POST'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function skipVideo(id) {
+    try {
+        await fetch(`/api/videos/${id}/skip`, {method: 'POST'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

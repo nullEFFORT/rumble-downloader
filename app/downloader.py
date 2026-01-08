@@ -1,0 +1,283 @@
+"""Video downloader using yt-dlp library."""
+
+import os
+import re
+import logging
+from datetime import datetime
+from typing import Optional
+
+import yt_dlp
+
+logger = logging.getLogger(__name__)
+
+
+class VideoDownloader:
+    """Handles video metadata extraction and downloading."""
+
+    CLIP_KEYWORDS = [
+        r'\bCLIP\b',
+        r'\bHIGHLIGHT',
+        r'\bSHORT\b',
+        r'\bCOMPILATION\b',
+        r'\bBEST\s+OF\b',
+        r'\bMOMENTS\b',
+        r'\bTOP\s+\d+',
+        r'\bPREVIEW\b',
+        r'\bTEASER\b',
+        r'\bTRAILER\b',
+    ]
+
+    def __init__(self, download_path: str, max_quality: str = '1080'):
+        self.download_path = download_path
+        self.max_quality = max_quality
+        os.makedirs(download_path, exist_ok=True)
+
+    def _get_base_opts(self) -> dict:
+        """Base yt-dlp options."""
+        return {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        }
+
+    def extract_channel_info(self, url: str) -> Optional[dict]:
+        """Extract channel info from a video or channel URL."""
+        opts = self._get_base_opts()
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                if not info:
+                    return None
+
+                # Detect platform
+                platform = self._detect_platform(url, info)
+
+                # Extract channel details
+                channel_id = info.get('channel_id') or info.get('uploader_id')
+                channel_url = info.get('channel_url') or info.get('uploader_url')
+                channel_name = info.get('channel') or info.get('uploader')
+
+                # Build RSS URL for YouTube
+                rss_url = None
+                if platform == 'youtube' and channel_id:
+                    rss_url = f'https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}'
+
+                return {
+                    'name': channel_name,
+                    'url': channel_url or url,
+                    'platform': platform,
+                    'channel_id': channel_id,
+                    'rss_url': rss_url,
+                    'thumbnail': info.get('thumbnail'),
+                    # If this was a video URL, include video info
+                    'video_title': info.get('title') if info.get('id') else None,
+                    'video_id': info.get('id'),
+                }
+        except Exception as e:
+            logger.error(f'Error extracting channel info from {url}: {e}')
+            return None
+
+    def _detect_platform(self, url: str, info: dict) -> str:
+        """Detect platform from URL or extractor info."""
+        extractor = info.get('extractor', '').lower()
+
+        if 'youtube' in extractor or 'youtube.com' in url or 'youtu.be' in url:
+            return 'youtube'
+        elif 'rumble' in extractor or 'rumble.com' in url:
+            return 'rumble'
+        else:
+            return extractor or 'unknown'
+
+    def get_video_metadata(self, url: str) -> Optional[dict]:
+        """Get metadata for a single video without downloading."""
+        opts = self._get_base_opts()
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                if not info:
+                    return None
+
+                return {
+                    'video_id': info.get('id'),
+                    'title': info.get('title'),
+                    'url': info.get('webpage_url') or url,
+                    'duration': info.get('duration'),
+                    'upload_date': self._parse_date(info.get('upload_date')),
+                    'thumbnail_url': info.get('thumbnail'),
+                    'view_count': info.get('view_count'),
+                    'description': info.get('description'),
+                    'channel_name': info.get('channel') or info.get('uploader'),
+                    'channel_id': info.get('channel_id') or info.get('uploader_id'),
+                }
+        except Exception as e:
+            logger.error(f'Error getting video metadata for {url}: {e}')
+            return None
+
+    def _parse_date(self, date_str: str) -> Optional[datetime]:
+        """Parse yt-dlp date format (YYYYMMDD)."""
+        if not date_str:
+            return None
+        try:
+            return datetime.strptime(date_str, '%Y%m%d').date()
+        except ValueError:
+            return None
+
+    def get_channel_videos(self, channel_url: str, max_videos: int = 50) -> list:
+        """Get list of videos from a channel."""
+        opts = self._get_base_opts()
+        opts['extract_flat'] = True
+        opts['playlist_items'] = f'1-{max_videos}'
+
+        videos = []
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(channel_url, download=False)
+
+                if not info:
+                    return []
+
+                entries = info.get('entries', [])
+                for entry in entries:
+                    if entry:
+                        videos.append({
+                            'video_id': entry.get('id'),
+                            'title': entry.get('title'),
+                            'url': entry.get('url') or entry.get('webpage_url'),
+                            'duration': entry.get('duration'),
+                            'upload_date': self._parse_date(entry.get('upload_date')),
+                        })
+        except Exception as e:
+            logger.error(f'Error getting channel videos from {channel_url}: {e}')
+
+        return videos
+
+    def classify_video(self, title: str, duration: int,
+                       clip_threshold: int = 300) -> tuple[bool, str]:
+        """
+        Classify video as clip or full episode.
+
+        Returns:
+            (is_clip, reason)
+        """
+        if not duration:
+            return False, 'unknown_duration'
+
+        # Check duration first
+        if duration < clip_threshold:
+            return True, f'duration_{duration}s_below_{clip_threshold}s'
+
+        # Check title keywords
+        if title:
+            title_upper = title.upper()
+            for pattern in self.CLIP_KEYWORDS:
+                if re.search(pattern, title_upper):
+                    return True, f'title_match_{pattern}'
+
+        return False, 'full_episode'
+
+    def download_video(self, url: str, channel_name: str,
+                       max_quality: str = None,
+                       progress_callback: callable = None) -> dict:
+        """
+        Download a video.
+
+        Returns:
+            {
+                'success': bool,
+                'file_path': str or None,
+                'file_size': int or None,
+                'error': str or None
+            }
+        """
+        quality = max_quality or self.max_quality
+
+        # Create channel subdirectory
+        channel_dir = os.path.join(self.download_path, self._sanitize_filename(channel_name))
+        os.makedirs(channel_dir, exist_ok=True)
+
+        # Output template
+        outtmpl = os.path.join(channel_dir, '%(upload_date)s - %(title)s.%(ext)s')
+
+        # Format selection based on quality
+        format_spec = self._get_format_spec(quality)
+
+        opts = {
+            'format': format_spec,
+            'outtmpl': outtmpl,
+            'quiet': True,
+            'no_warnings': True,
+            'merge_output_format': 'mp4',
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }],
+        }
+
+        if progress_callback:
+            opts['progress_hooks'] = [progress_callback]
+
+        result = {
+            'success': False,
+            'file_path': None,
+            'file_size': None,
+            'error': None,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+
+                if info:
+                    # Get the actual downloaded file path
+                    file_path = ydl.prepare_filename(info)
+                    # Handle extension change to mp4
+                    base, ext = os.path.splitext(file_path)
+                    mp4_path = base + '.mp4'
+
+                    if os.path.exists(mp4_path):
+                        file_path = mp4_path
+                    elif os.path.exists(file_path):
+                        pass
+                    else:
+                        # Try to find the file
+                        for ext in ['.mp4', '.mkv', '.webm']:
+                            if os.path.exists(base + ext):
+                                file_path = base + ext
+                                break
+
+                    result['success'] = True
+                    result['file_path'] = file_path
+                    result['file_size'] = os.path.getsize(file_path) if os.path.exists(file_path) else None
+
+        except yt_dlp.utils.DownloadError as e:
+            result['error'] = str(e)
+            logger.error(f'Download error for {url}: {e}')
+        except Exception as e:
+            result['error'] = str(e)
+            logger.error(f'Unexpected error downloading {url}: {e}')
+
+        return result
+
+    def _get_format_spec(self, quality: str) -> str:
+        """Get yt-dlp format specification for quality."""
+        if quality == 'best':
+            return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+        elif quality == '720':
+            return 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]'
+        elif quality == '1080':
+            return 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]'
+        elif quality == '480':
+            return 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]'
+        else:
+            return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitize string for use as filename."""
+        # Remove or replace invalid characters
+        sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
+        sanitized = sanitized.strip('. ')
+        return sanitized or 'unknown'

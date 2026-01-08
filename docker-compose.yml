@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  video-downloader:
+    build: .
+    container_name: video-downloader
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    volumes:
+      - ./data:/data
+      - /opt/homelab/data/video-downloader/downloads:/downloads
+    environment:
+      - TZ=America/Chicago
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DATABASE_URL=sqlite:////data/videodownloader.db
+      - DOWNLOAD_PATH=/downloads
+    labels:
+      - "homelab.service=video-downloader"
+      - "homelab.description=YouTube/Rumble video downloader with web UI"
+      - "homelab.priority=low"
+    networks:
+      - homelab-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/stats')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  homelab-network:
+    external: true

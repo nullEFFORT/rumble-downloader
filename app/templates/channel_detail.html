@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}{{ channel.name }} - Video Downloader{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ channel.name }}</h1>
+    <div class="header-badges">
+        <span class="badge badge-{{ channel.platform }}">{{ channel.platform }}</span>
+        {% if channel.enabled %}
+        <span class="badge badge-success">Active</span>
+        {% else %}
+        <span class="badge badge-disabled">Disabled</span>
+        {% endif %}
+    </div>
+</div>
+
+<section class="channel-settings">
+    <h2>Settings</h2>
+    <form id="settings-form" class="settings-form">
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Channel URL</label>
+                <input type="text" value="{{ channel.url }}" readonly class="readonly">
+            </div>
+
+            <div class="form-group">
+                <label for="check-interval">Check interval (hours)</label>
+                <input type="number" id="check-interval" name="check_interval_hours"
+                       value="{{ channel.check_interval_hours }}" min="1" max="168">
+            </div>
+
+            <div class="form-group">
+                <label for="quality">Max quality</label>
+                <select id="quality" name="quality">
+                    <option value="best" {% if channel.quality == 'best' %}selected{% endif %}>Best</option>
+                    <option value="1080" {% if channel.quality == '1080' %}selected{% endif %}>1080p</option>
+                    <option value="720" {% if channel.quality == '720' %}selected{% endif %}>720p</option>
+                    <option value="480" {% if channel.quality == '480' %}selected{% endif %}>480p</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="clip-threshold">Clip threshold (seconds)</label>
+                <input type="number" id="clip-threshold" name="clip_threshold_seconds"
+                       value="{{ channel.clip_threshold_seconds }}" min="60" max="1800">
+            </div>
+
+            <div class="form-group checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="enabled" {% if channel.enabled %}checked{% endif %}>
+                    Enabled
+                </label>
+            </div>
+
+            <div class="form-group checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="download_clips" {% if channel.download_clips %}checked{% endif %}>
+                    Download clips
+                </label>
+            </div>
+
+            <div class="form-group checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="backfill_enabled" {% if channel.backfill_enabled %}checked{% endif %}>
+                    Backfill enabled
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label for="backfill-limit">Backfill limit</label>
+                <input type="number" id="backfill-limit" name="backfill_limit"
+                       value="{{ channel.backfill_limit }}" min="1" max="500">
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+            <button type="button" class="btn btn-secondary" onclick="checkChannel()">Check Now</button>
+            <button type="button" class="btn btn-secondary" onclick="backfillChannel()">Run Backfill</button>
+        </div>
+    </form>
+</section>
+
+<section class="videos-section">
+    <h2>Videos ({{ videos|length }})</h2>
+
+    <div class="filter-bar">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="pending">Pending</button>
+        <button class="filter-btn" data-filter="completed">Downloaded</button>
+        <button class="filter-btn" data-filter="failed">Failed</button>
+        <button class="filter-btn" data-filter="skipped">Skipped</button>
+    </div>
+
+    <div class="videos-list">
+        {% for video in videos %}
+        <div class="video-row" data-status="{{ video.status }}" data-id="{{ video.id }}">
+            <div class="video-thumb">
+                {% if video.thumbnail_url %}
+                <img src="{{ video.thumbnail_url }}" alt="" loading="lazy">
+                {% else %}
+                <div class="thumb-placeholder"></div>
+                {% endif %}
+            </div>
+            <div class="video-info">
+                <div class="video-title">{{ video.title or video.video_id }}</div>
+                <div class="video-meta">
+                    <span class="duration">{{ video.duration_formatted or '?' }}</span>
+                    {% if video.upload_date %}
+                    <span class="date">{{ video.upload_date }}</span>
+                    {% endif %}
+                    {% if video.is_clip %}
+                    <span class="badge badge-clip">Clip</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="video-status">
+                <span class="status-badge status-{{ video.status }}">{{ video.status }}</span>
+                {% if video.file_size %}
+                <span class="file-size">{{ video.file_size_formatted }}</span>
+                {% endif %}
+            </div>
+            <div class="video-actions">
+                {% if video.status in ['pending', 'failed', 'skipped'] %}
+                <button class="btn btn-sm btn-primary" onclick="downloadVideo({{ video.id }})">Download</button>
+                {% endif %}
+                {% if video.status == 'pending' %}
+                <button class="btn btn-sm btn-secondary" onclick="skipVideo({{ video.id }})">Skip</button>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <p class="empty-message">No videos yet. Click "Check Now" to scan the channel.</p>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const channelId = {{ channel.id }};
+
+document.getElementById('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+
+    const payload = {
+        check_interval_hours: parseInt(form.check_interval_hours.value),
+        quality: form.quality.value,
+        clip_threshold_seconds: parseInt(form.clip_threshold_seconds.value),
+        enabled: form.enabled.checked,
+        download_clips: form.download_clips.checked,
+        backfill_enabled: form.backfill_enabled.checked,
+        backfill_limit: parseInt(form.backfill_limit.value),
+    };
+
+    try {
+        const response = await fetch(`/api/channels/${channelId}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+            alert('Settings saved');
+        } else {
+            const data = await response.json();
+            alert(data.error || 'Error saving settings');
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+});
+
+async function checkChannel() {
+    try {
+        await fetch(`/api/channels/${channelId}/check`, {method: 'POST'});
+        alert('Channel check triggered. Refresh in a moment.');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function backfillChannel() {
+    if (!confirm('This will scan and queue older videos. Continue?')) return;
+    try {
+        await fetch(`/api/channels/${channelId}/backfill`, {method: 'POST'});
+        alert('Backfill triggered. Refresh in a moment.');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function downloadVideo(id) {
+    try {
+        await fetch(`/api/videos/${id}/download`, {method: 'POST'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function skipVideo(id) {
+    try {
+        await fetch(`/api/videos/${id}/skip`, {method: 'POST'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+// Filter buttons
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        const filter = btn.dataset.filter;
+        document.querySelectorAll('.video-row').forEach(row => {
+            if (filter === 'all' || row.dataset.status === filter) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

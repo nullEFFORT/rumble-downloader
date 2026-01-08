@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Channels - Video Downloader{% endblock %}
+
+{% block content %}
+<h1>Channels</h1>
+
+<div class="channels-grid">
+    {% for channel in channels %}
+    <div class="channel-card" data-id="{{ channel.id }}">
+        <div class="channel-header">
+            <span class="channel-name">{{ channel.name }}</span>
+            <div class="channel-badges">
+                <span class="badge badge-{{ channel.platform }}">{{ channel.platform }}</span>
+                {% if channel.enabled %}
+                <span class="badge badge-success">Active</span>
+                {% else %}
+                <span class="badge badge-disabled">Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="channel-info">
+            <div class="info-row">
+                <span class="label">Videos:</span>
+                <span class="value">{{ channel.video_count }}</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Check every:</span>
+                <span class="value">{{ channel.check_interval_hours }} hours</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Quality:</span>
+                <span class="value">{{ channel.quality }}p max</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Download clips:</span>
+                <span class="value">{{ 'Yes' if channel.download_clips else 'No' }}</span>
+            </div>
+            {% if channel.last_checked %}
+            <div class="info-row">
+                <span class="label">Last checked:</span>
+                <span class="value">{{ channel.last_checked.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="channel-actions">
+            <a href="/channel/{{ channel.id }}" class="btn btn-primary btn-sm">View Details</a>
+            <button class="btn btn-secondary btn-sm" onclick="checkChannel({{ channel.id }})">Check Now</button>
+            <button class="btn btn-secondary btn-sm" onclick="toggleChannel({{ channel.id }}, {{ 'false' if channel.enabled else 'true' }})">
+                {{ 'Disable' if channel.enabled else 'Enable' }}
+            </button>
+            <button class="btn btn-danger btn-sm" onclick="deleteChannel({{ channel.id }}, '{{ channel.name }}')">Delete</button>
+        </div>
+    </div>
+    {% else %}
+    <p class="empty-message">No channels yet. <a href="/">Add one from the dashboard</a>.</p>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function checkChannel(id) {
+    try {
+        await fetch(`/api/channels/${id}/check`, {method: 'POST'});
+        alert('Channel check triggered');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function toggleChannel(id, enabled) {
+    try {
+        await fetch(`/api/channels/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled})
+        });
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function deleteChannel(id, name) {
+    if (!confirm(`Delete channel "${name}" and all its videos?`)) return;
+
+    try {
+        await fetch(`/api/channels/${id}`, {method: 'DELETE'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

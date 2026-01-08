@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Video Downloader{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<section class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_channels }}</div>
+        <div class="stat-label">Total Channels</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.enabled_channels }}</div>
+        <div class="stat-label">Active Channels</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_videos }}</div>
+        <div class="stat-label">Total Videos</div>
+    </div>
+    <div class="stat-card pending">
+        <div class="stat-value">{{ stats.pending_videos }}</div>
+        <div class="stat-label">Pending</div>
+    </div>
+    <div class="stat-card success">
+        <div class="stat-value">{{ stats.completed_videos }}</div>
+        <div class="stat-label">Downloaded</div>
+    </div>
+    <div class="stat-card error">
+        <div class="stat-value">{{ stats.failed_videos }}</div>
+        <div class="stat-label">Failed</div>
+    </div>
+</section>
+
+<section class="add-channel-section">
+    <h2>Add Channel</h2>
+    <p class="help-text">Paste a YouTube or Rumble video/channel URL to add a new channel.</p>
+
+    <form id="add-channel-form" class="add-channel-form">
+        <div class="form-row">
+            <input type="url" id="channel-url" name="url" placeholder="https://youtube.com/watch?v=... or https://rumble.com/..." required>
+            <button type="button" id="discover-btn" class="btn btn-secondary">Discover</button>
+            <button type="submit" class="btn btn-primary" disabled id="add-btn">Add Channel</button>
+        </div>
+
+        <div id="channel-preview" class="channel-preview hidden">
+            <div class="preview-header">
+                <strong id="preview-name"></strong>
+                <span id="preview-platform" class="badge"></span>
+            </div>
+            <div class="preview-details">
+                <span id="preview-url"></span>
+            </div>
+        </div>
+
+        <div id="channel-options" class="channel-options hidden">
+            <h3>Options</h3>
+            <div class="options-grid">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="download_clips" id="download-clips">
+                    Download clips (short videos)
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" name="backfill_enabled" id="backfill-enabled">
+                    Backfill existing videos
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="clip-threshold">Clip threshold (seconds):</label>
+                <input type="number" id="clip-threshold" name="clip_threshold_seconds" value="300" min="60" max="1800">
+            </div>
+            <div class="form-group">
+                <label for="check-interval">Check interval (hours):</label>
+                <input type="number" id="check-interval" name="check_interval_hours" value="6" min="1" max="168">
+            </div>
+            <div class="form-group">
+                <label for="quality">Quality:</label>
+                <select id="quality" name="quality">
+                    <option value="1080">1080p (max)</option>
+                    <option value="720">720p (max)</option>
+                    <option value="480">480p (max)</option>
+                    <option value="best">Best available</option>
+                </select>
+            </div>
+        </div>
+    </form>
+</section>
+
+<section class="channels-section">
+    <h2>Channels</h2>
+    {% if channels %}
+    <div class="channels-list">
+        {% for channel in channels %}
+        <div class="channel-card" data-id="{{ channel.id }}">
+            <div class="channel-header">
+                <span class="channel-name">{{ channel.name }}</span>
+                <span class="badge badge-{{ channel.platform }}">{{ channel.platform }}</span>
+                {% if not channel.enabled %}
+                <span class="badge badge-disabled">Disabled</span>
+                {% endif %}
+            </div>
+            <div class="channel-stats">
+                <span>{{ channel.video_count }} videos</span>
+                {% if channel.last_checked %}
+                <span>Last checked: {{ channel.last_checked.strftime('%Y-%m-%d %H:%M') }}</span>
+                {% endif %}
+            </div>
+            <div class="channel-actions">
+                <a href="/channel/{{ channel.id }}" class="btn btn-sm">View</a>
+                <button class="btn btn-sm btn-secondary" onclick="checkChannel({{ channel.id }})">Check Now</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-message">No channels added yet. Add one above!</p>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let discoveredChannel = null;
+
+document.getElementById('discover-btn').addEventListener('click', async () => {
+    const url = document.getElementById('channel-url').value;
+    if (!url) return;
+
+    const btn = document.getElementById('discover-btn');
+    btn.disabled = true;
+    btn.textContent = 'Discovering...';
+
+    try {
+        const response = await fetch('/api/channels/discover', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url})
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            discoveredChannel = data;
+            showPreview(data);
+            document.getElementById('add-btn').disabled = false;
+        } else {
+            alert(data.error || 'Could not discover channel');
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Discover';
+    }
+});
+
+function showPreview(data) {
+    document.getElementById('preview-name').textContent = data.name || 'Unknown';
+    document.getElementById('preview-platform').textContent = data.platform;
+    document.getElementById('preview-platform').className = 'badge badge-' + data.platform;
+    document.getElementById('preview-url').textContent = data.url;
+
+    document.getElementById('channel-preview').classList.remove('hidden');
+    document.getElementById('channel-options').classList.remove('hidden');
+
+    if (data.video_detected) {
+        document.getElementById('preview-details').innerHTML +=
+            '<div class="video-notice">Detected from video: ' + data.video_title + '</div>';
+    }
+}
+
+document.getElementById('add-channel-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (!discoveredChannel) return;
+
+    const btn = document.getElementById('add-btn');
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+
+    const payload = {
+        url: discoveredChannel.url,
+        download_clips: document.getElementById('download-clips').checked,
+        backfill_enabled: document.getElementById('backfill-enabled').checked,
+        clip_threshold_seconds: parseInt(document.getElementById('clip-threshold').value),
+        check_interval_hours: parseInt(document.getElementById('check-interval').value),
+        quality: document.getElementById('quality').value,
+    };
+
+    try {
+        const response = await fetch('/api/channels', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            location.reload();
+        } else {
+            alert(data.error || 'Could not add channel');
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add Channel';
+    }
+});
+
+async function checkChannel(id) {
+    try {
+        await fetch(`/api/channels/${id}/check`, {method: 'POST'});
+        alert('Channel check triggered');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+</script>
+{% endblock %}
