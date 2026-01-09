@@ -280,3 +280,175 @@ def api_logs():
         'details': log.details,
         'created_at': log.created_at.isoformat(),
     } for log in logs])
+
+
+# ==================== Queue Control API ====================
+
+@bp.route('/api/queue/status', methods=['GET'])
+def api_queue_status():
+    """Get queue status including pause state and active downloads."""
+    scheduler = current_app.config.get('scheduler')
+    if not scheduler:
+        return jsonify({'error': 'Scheduler not available'}), 500
+
+    status = scheduler.get_queue_status()
+    status['pending_count'] = Video.query.filter_by(status='pending').count()
+    return jsonify(status)
+
+
+@bp.route('/api/queue/pause', methods=['POST'])
+def api_queue_pause():
+    """Pause the download queue."""
+    scheduler = current_app.config.get('scheduler')
+    if not scheduler:
+        return jsonify({'error': 'Scheduler not available'}), 500
+
+    scheduler.pause_queue()
+    return jsonify({'message': 'Queue paused', 'paused': True})
+
+
+@bp.route('/api/queue/resume', methods=['POST'])
+def api_queue_resume():
+    """Resume the download queue."""
+    scheduler = current_app.config.get('scheduler')
+    if not scheduler:
+        return jsonify({'error': 'Scheduler not available'}), 500
+
+    scheduler.resume_queue()
+    return jsonify({'message': 'Queue resumed', 'paused': False})
+
+
+@bp.route('/api/queue/cancel-all', methods=['POST'])
+def api_queue_cancel_all():
+    """Cancel all active downloads."""
+    scheduler = current_app.config.get('scheduler')
+    if not scheduler:
+        return jsonify({'error': 'Scheduler not available'}), 500
+
+    scheduler.cancel_all_downloads()
+    return jsonify({'message': 'Cancellation requested for all active downloads'})
+
+
+@bp.route('/api/videos/<int:video_id>/cancel', methods=['POST'])
+def api_cancel_video(video_id):
+    """Cancel an active download."""
+    scheduler = current_app.config.get('scheduler')
+    if not scheduler:
+        return jsonify({'error': 'Scheduler not available'}), 500
+
+    if scheduler.cancel_download(video_id):
+        return jsonify({'message': 'Cancellation requested'})
+    else:
+        return jsonify({'error': 'Video is not currently downloading'}), 400
+
+
+@bp.route('/api/videos/<int:video_id>/priority', methods=['POST'])
+def api_set_priority(video_id):
+    """Set video download priority."""
+    video = Video.query.get_or_404(video_id)
+    data = request.get_json()
+    priority = data.get('priority', 0)
+
+    video.priority = priority
+    db.session.commit()
+
+    return jsonify({'message': 'Priority updated', 'video_id': video_id, 'priority': priority})
+
+
+@bp.route('/api/videos/<int:video_id>/unskip', methods=['POST'])
+def api_unskip_video(video_id):
+    """Move a skipped video back to pending."""
+    video = Video.query.get_or_404(video_id)
+
+    if video.status != 'skipped':
+        return jsonify({'error': f'Video is {video.status}, not skipped'}), 400
+
+    video.status = 'pending'
+    video.error_message = None
+    db.session.commit()
+
+    return jsonify({'message': 'Video moved to pending'})
+
+
+@bp.route('/api/videos/bulk-skip', methods=['POST'])
+def api_bulk_skip():
+    """Skip multiple videos at once."""
+    data = request.get_json()
+    video_ids = data.get('video_ids', [])
+
+    if not video_ids:
+        return jsonify({'error': 'No video IDs provided'}), 400
+
+    count = Video.query.filter(Video.id.in_(video_ids), Video.status == 'pending')\
+        .update({Video.status: 'skipped'}, synchronize_session=False)
+    db.session.commit()
+
+    return jsonify({'message': f'Skipped {count} videos'})
+
+
+@bp.route('/api/videos/bulk-priority', methods=['POST'])
+def api_bulk_priority():
+    """Set priority for multiple videos at once."""
+    data = request.get_json()
+    video_ids = data.get('video_ids', [])
+    priority = data.get('priority', 0)
+
+    if not video_ids:
+        return jsonify({'error': 'No video IDs provided'}), 400
+
+    count = Video.query.filter(Video.id.in_(video_ids))\
+        .update({Video.priority: priority}, synchronize_session=False)
+    db.session.commit()
+
+    return jsonify({'message': f'Updated priority for {count} videos'})
+
+
+@bp.route('/api/videos/<int:video_id>/delete-file', methods=['POST'])
+def api_delete_video_file(video_id):
+    """Delete the downloaded video file from disk."""
+    import os
+
+    video = Video.query.get_or_404(video_id)
+
+    if not video.file_path:
+        return jsonify({'error': 'No file path recorded for this video'}), 400
+
+    if not os.path.exists(video.file_path):
+        # File doesn't exist, just clear the database record
+        video.file_path = None
+        video.file_size = None
+        video.status = 'pending'
+        video.downloaded_at = None
+        db.session.commit()
+        return jsonify({'message': 'File not found, cleared record'})
+
+    try:
+        os.remove(video.file_path)
+        video.file_path = None
+        video.file_size = None
+        video.status = 'pending'
+        video.downloaded_at = None
+        db.session.commit()
+        return jsonify({'message': 'File deleted successfully'})
+    except OSError as e:
+        return jsonify({'error': f'Failed to delete file: {str(e)}'}), 500
+
+
+@bp.route('/api/videos/<int:video_id>/open', methods=['GET'])
+def api_get_video_open_url(video_id):
+    """Get the URL or file path to open the video."""
+    video = Video.query.get_or_404(video_id)
+
+    if video.status == 'completed' and video.file_path:
+        # Return the local file path for completed downloads
+        return jsonify({
+            'type': 'file',
+            'path': video.file_path,
+            'url': video.url
+        })
+    else:
+        # Return the source URL for non-downloaded videos
+        return jsonify({
+            'type': 'url',
+            'url': video.url
+        })

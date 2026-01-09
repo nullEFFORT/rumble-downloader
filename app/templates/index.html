@@ -5,6 +5,22 @@
 {% block content %}
 <h1>Dashboard</h1>
 
+<!-- Queue Control Panel -->
+<section class="queue-control-panel" id="queue-panel">
+    <div class="queue-header">
+        <h2>Download Queue</h2>
+        <div class="queue-buttons">
+            <button id="pause-btn" class="btn btn-warning" onclick="toggleQueue()">Pause</button>
+            <button id="cancel-all-btn" class="btn btn-danger" onclick="cancelAllDownloads()">Cancel All</button>
+        </div>
+    </div>
+    <div class="queue-status">
+        <span id="queue-status-text">Loading...</span>
+        <span id="pending-count"></span>
+    </div>
+    <div id="active-downloads" class="active-downloads"></div>
+</section>
+
 <section class="stats-grid">
     <div class="stat-card">
         <div class="stat-value">{{ stats.total_channels }}</div>
@@ -217,5 +233,115 @@ async function checkChannel(id) {
         alert('Error: ' + e.message);
     }
 }
+
+// Queue Control Functions
+let queuePaused = false;
+
+async function updateQueueStatus() {
+    try {
+        const response = await fetch('/api/queue/status');
+        const data = await response.json();
+
+        queuePaused = data.paused;
+
+        // Update pause button
+        const pauseBtn = document.getElementById('pause-btn');
+        pauseBtn.textContent = data.paused ? 'Resume' : 'Pause';
+        pauseBtn.className = data.paused ? 'btn btn-success' : 'btn btn-warning';
+
+        // Update status text
+        const statusText = document.getElementById('queue-status-text');
+        if (data.paused) {
+            statusText.innerHTML = '<span class="status-paused">⏸ Queue Paused</span>';
+        } else if (data.active_count > 0) {
+            statusText.innerHTML = '<span class="status-active">▶ Downloading...</span>';
+        } else {
+            statusText.innerHTML = '<span class="status-idle">● Idle</span>';
+        }
+
+        // Update pending count
+        document.getElementById('pending-count').textContent = `${data.pending_count} pending`;
+
+        // Update active downloads
+        const container = document.getElementById('active-downloads');
+        if (data.active_downloads.length === 0) {
+            container.innerHTML = '<p class="no-downloads">No active downloads</p>';
+        } else {
+            container.innerHTML = data.active_downloads.map(dl => {
+                const progress = dl.progress || {};
+                const percent = progress.percent || 0;
+                const speed = progress.speed ? formatSpeed(progress.speed) : '--';
+                const eta = progress.eta ? formatEta(progress.eta) : '--';
+
+                return `
+                    <div class="download-item">
+                        <div class="download-info">
+                            <span class="download-id">Video #${dl.video_id}</span>
+                            <span class="download-stats">${speed} - ETA: ${eta}</span>
+                        </div>
+                        <div class="download-progress">
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${percent}%"></div>
+                            </div>
+                            <span class="progress-text">${percent.toFixed(1)}%</span>
+                        </div>
+                        <button class="btn btn-sm btn-danger" onclick="cancelDownload(${dl.video_id})">Cancel</button>
+                    </div>
+                `;
+            }).join('');
+        }
+    } catch (e) {
+        console.error('Error updating queue status:', e);
+    }
+}
+
+function formatSpeed(bytesPerSec) {
+    if (!bytesPerSec) return '--';
+    if (bytesPerSec > 1024 * 1024) {
+        return (bytesPerSec / (1024 * 1024)).toFixed(1) + ' MB/s';
+    }
+    return (bytesPerSec / 1024).toFixed(0) + ' KB/s';
+}
+
+function formatEta(seconds) {
+    if (!seconds || seconds < 0) return '--';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+async function toggleQueue() {
+    const endpoint = queuePaused ? '/api/queue/resume' : '/api/queue/pause';
+    try {
+        await fetch(endpoint, {method: 'POST'});
+        updateQueueStatus();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function cancelDownload(videoId) {
+    if (!confirm('Cancel this download?')) return;
+    try {
+        await fetch(`/api/videos/${videoId}/cancel`, {method: 'POST'});
+        updateQueueStatus();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function cancelAllDownloads() {
+    if (!confirm('Cancel ALL active downloads?')) return;
+    try {
+        await fetch('/api/queue/cancel-all', {method: 'POST'});
+        updateQueueStatus();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+// Update queue status every 2 seconds
+updateQueueStatus();
+setInterval(updateQueueStatus, 2000);
 </script>
 {% endblock %}

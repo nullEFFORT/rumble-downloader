@@ -18,6 +18,7 @@
     <table>
         <thead>
             <tr>
+                <th></th>
                 <th>Title</th>
                 <th>Channel</th>
                 <th>Duration</th>
@@ -27,7 +28,10 @@
         </thead>
         <tbody>
             {% for video in videos %}
-            <tr data-id="{{ video.id }}">
+            <tr class="video-row-main" data-id="{{ video.id }}" onclick="toggleVideoDetails({{ video.id }})">
+                <td class="expand-toggle">
+                    <span class="expand-icon">&#9654;</span>
+                </td>
                 <td class="title-cell">
                     <div class="video-title">{{ video.title or video.video_id }}</div>
                     {% if video.is_clip %}
@@ -35,7 +39,7 @@
                     {% endif %}
                 </td>
                 <td>
-                    <a href="/channel/{{ video.channel_id }}">{{ video.channel.name }}</a>
+                    <a href="/channel/{{ video.channel_id }}" onclick="event.stopPropagation()">{{ video.channel.name }}</a>
                 </td>
                 <td>{{ video.duration_formatted or '-' }}</td>
                 <td>
@@ -44,21 +48,133 @@
                     <span class="error-hint" title="{{ video.error_message }}">!</span>
                     {% endif %}
                 </td>
-                <td>
+                <td class="actions-cell" onclick="event.stopPropagation()">
                     {% if video.status in ['pending', 'failed', 'skipped'] %}
                     <button class="btn btn-sm btn-primary" onclick="downloadVideo({{ video.id }})">Download</button>
                     {% endif %}
                     {% if video.status == 'pending' %}
                     <button class="btn btn-sm btn-secondary" onclick="skipVideo({{ video.id }})">Skip</button>
                     {% endif %}
+                    {% if video.status == 'skipped' %}
+                    <button class="btn btn-sm btn-secondary" onclick="unskipVideo({{ video.id }})">Unskip</button>
+                    {% endif %}
                     {% if video.status == 'completed' and video.file_path %}
                     <span class="file-info" title="{{ video.file_path }}">{{ video.file_size_formatted }}</span>
                     {% endif %}
                 </td>
             </tr>
+            <tr class="video-row-details hidden" id="details-{{ video.id }}">
+                <td colspan="6">
+                    <div class="video-details-content">
+                        <div class="video-thumbnail">
+                            {% if video.thumbnail_url %}
+                            <img src="{{ video.thumbnail_url }}" alt="{{ video.title }}" loading="lazy">
+                            {% else %}
+                            <div class="thumb-placeholder-large">No Thumbnail</div>
+                            {% endif %}
+                        </div>
+                        <div class="video-details-info">
+                            <h3>{{ video.title or video.video_id }}</h3>
+                            <div class="details-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">Video ID:</span>
+                                    <span class="detail-value">{{ video.video_id }}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Channel:</span>
+                                    <span class="detail-value">{{ video.channel.name }}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Platform:</span>
+                                    <span class="detail-value">{{ video.channel.platform }}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Duration:</span>
+                                    <span class="detail-value">{{ video.duration_formatted or 'Unknown' }} {% if video.duration %}({{ video.duration }}s){% endif %}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Upload Date:</span>
+                                    <span class="detail-value">{{ video.upload_date or 'Unknown' }}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Discovered:</span>
+                                    <span class="detail-value">{{ video.discovered_at.strftime('%Y-%m-%d %H:%M') if video.discovered_at else 'Unknown' }}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Status:</span>
+                                    <span class="detail-value">
+                                        <span class="status-badge status-{{ video.status }}">{{ video.status }}</span>
+                                    </span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Priority:</span>
+                                    <span class="detail-value">
+                                        <input type="number" class="priority-input" value="{{ video.priority }}"
+                                               onchange="setPriority({{ video.id }}, this.value)" min="-100" max="100">
+                                    </span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Type:</span>
+                                    <span class="detail-value">
+                                        {% if video.is_clip %}
+                                        <span class="badge badge-clip">Clip</span> - {{ video.classification_reason }}
+                                        {% else %}
+                                        Full Episode
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                <div class="detail-item full-width">
+                                    <span class="detail-label">URL:</span>
+                                    <span class="detail-value">
+                                        <a href="{{ video.url }}" target="_blank" rel="noopener">{{ video.url }}</a>
+                                    </span>
+                                </div>
+                                {% if video.status == 'completed' %}
+                                <div class="detail-item">
+                                    <span class="detail-label">Downloaded:</span>
+                                    <span class="detail-value">{{ video.downloaded_at.strftime('%Y-%m-%d %H:%M') if video.downloaded_at else 'Unknown' }}</span>
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">File Size:</span>
+                                    <span class="detail-value">{{ video.file_size_formatted }}</span>
+                                </div>
+                                <div class="detail-item full-width">
+                                    <span class="detail-label">File Path:</span>
+                                    <span class="detail-value file-path">{{ video.file_path }}</span>
+                                </div>
+                                {% endif %}
+                                {% if video.error_message %}
+                                <div class="detail-item full-width error-detail">
+                                    <span class="detail-label">Error:</span>
+                                    <span class="detail-value">{{ video.error_message }}</span>
+                                </div>
+                                {% endif %}
+                            </div>
+                            <div class="detail-actions">
+                                <button class="btn btn-secondary" onclick="openVideo({{ video.id }}, '{{ video.url }}')">Open in Browser</button>
+                                {% if video.status == 'completed' and video.file_path %}
+                                <button class="btn btn-danger" onclick="deleteVideoFile({{ video.id }})">Delete File</button>
+                                {% endif %}
+                                {% if video.status in ['pending', 'failed', 'skipped'] %}
+                                <button class="btn btn-primary" onclick="downloadVideo({{ video.id }})">Download Now</button>
+                                {% endif %}
+                                {% if video.status == 'pending' %}
+                                <button class="btn btn-secondary" onclick="skipVideo({{ video.id }})">Skip</button>
+                                {% endif %}
+                                {% if video.status == 'skipped' %}
+                                <button class="btn btn-secondary" onclick="unskipVideo({{ video.id }})">Move to Pending</button>
+                                {% endif %}
+                                {% if video.status == 'downloading' %}
+                                <button class="btn btn-danger" onclick="cancelVideo({{ video.id }})">Cancel Download</button>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </td>
+            </tr>
             {% else %}
             <tr>
-                <td colspan="5" class="empty-message">No videos found.</td>
+                <td colspan="6" class="empty-message">No videos found.</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -68,6 +184,22 @@
 
 {% block scripts %}
 <script>
+function toggleVideoDetails(videoId) {
+    const detailsRow = document.getElementById('details-' + videoId);
+    const mainRow = document.querySelector(`tr[data-id="${videoId}"]`);
+    const expandIcon = mainRow.querySelector('.expand-icon');
+
+    if (detailsRow.classList.contains('hidden')) {
+        detailsRow.classList.remove('hidden');
+        mainRow.classList.add('expanded');
+        expandIcon.innerHTML = '&#9660;'; // down arrow
+    } else {
+        detailsRow.classList.add('hidden');
+        mainRow.classList.remove('expanded');
+        expandIcon.innerHTML = '&#9654;'; // right arrow
+    }
+}
+
 async function downloadVideo(id) {
     try {
         await fetch(`/api/videos/${id}/download`, {method: 'POST'});
@@ -81,6 +213,58 @@ async function skipVideo(id) {
     try {
         await fetch(`/api/videos/${id}/skip`, {method: 'POST'});
         location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function unskipVideo(id) {
+    try {
+        await fetch(`/api/videos/${id}/unskip`, {method: 'POST'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function cancelVideo(id) {
+    if (!confirm('Cancel this download?')) return;
+    try {
+        await fetch(`/api/videos/${id}/cancel`, {method: 'POST'});
+        location.reload();
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function setPriority(id, priority) {
+    try {
+        await fetch(`/api/videos/${id}/priority`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({priority: parseInt(priority)})
+        });
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function openVideo(id, fallbackUrl) {
+    // Open the video URL in a new tab
+    window.open(fallbackUrl, '_blank');
+}
+
+async function deleteVideoFile(id) {
+    if (!confirm('Delete the downloaded file from disk? This cannot be undone.')) return;
+    try {
+        const response = await fetch(`/api/videos/${id}/delete-file`, {method: 'POST'});
+        const data = await response.json();
+        if (response.ok) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.error || 'Failed to delete file');
+        }
     } catch (e) {
         alert('Error: ' + e.message);
     }

@@ -248,10 +248,17 @@ class VideoDownloader:
                 entries = info.get('entries', [])
                 for entry in entries:
                     if entry:
+                        video_id = entry.get('id')
+                        video_url = entry.get('url') or entry.get('webpage_url')
+
+                        # Extract video_id from Rumble URL if not provided
+                        if not video_id and video_url and 'rumble.com' in video_url:
+                            video_id = self._extract_rumble_video_id(video_url)
+
                         videos.append({
-                            'video_id': entry.get('id'),
+                            'video_id': video_id,
                             'title': entry.get('title'),
-                            'url': entry.get('url') or entry.get('webpage_url'),
+                            'url': video_url,
                             'duration': entry.get('duration'),
                             'upload_date': self._parse_date(entry.get('upload_date')),
                         })
@@ -259,6 +266,23 @@ class VideoDownloader:
             logger.error(f'Error getting channel videos from {channel_url}: {e}')
 
         return videos
+
+    def _extract_rumble_video_id(self, url: str) -> Optional[str]:
+        """Extract video ID from Rumble URL.
+
+        Rumble video URLs look like: https://rumble.com/v73rzhm-video-title.html
+        The video ID is the part after /v and before the dash: v73rzhm
+        """
+        try:
+            parsed = urlparse(url)
+            path = parsed.path.strip('/')
+            # Match pattern like v73rzhm-title.html
+            match = re.match(r'^(v[a-zA-Z0-9]+)', path)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return None
 
     def classify_video(self, title: str, duration: int,
                        clip_threshold: int = 300) -> tuple[bool, str]:
@@ -320,6 +344,18 @@ class VideoDownloader:
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
             }],
+            # Speed optimizations - download multiple fragments simultaneously
+            'concurrent_fragment_downloads': 4,
+            # Buffer and chunk sizes for faster throughput
+            'buffersize': 1024 * 64,  # 64KB buffer
+            'http_chunk_size': 10485760,  # 10MB chunks
+            # Retries for reliability
+            'retries': 10,
+            'fragment_retries': 10,
+            # Don't limit download rate - let it go as fast as possible
+            'ratelimit': None,
+            # Network optimizations
+            'socket_timeout': 30,
         }
 
         if progress_callback:

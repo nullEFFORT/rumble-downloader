@@ -2,7 +2,8 @@
 
 import logging
 from datetime import datetime, timedelta
-from threading import Thread
+from threading import Thread, Event, Lock
+from typing import Dict, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -14,15 +15,29 @@ from .downloader import VideoDownloader
 logger = logging.getLogger(__name__)
 
 
-class DownloadScheduler:
-    """Manages scheduled channel checks and downloads."""
+class DownloadCancelled(Exception):
+    """Raised when a download is cancelled by user."""
+    pass
 
-    def __init__(self, app=None, download_path: str = '/downloads'):
+
+class DownloadScheduler:
+    """Manages scheduled channel checks and downloads with queue control."""
+
+    def __init__(self, app=None, download_path: str = '/downloads', max_concurrent_downloads: int = 2):
         self.scheduler = BackgroundScheduler()
         self.downloader = VideoDownloader(download_path)
         self.app = app
         self.download_path = download_path
         self._is_running = False
+
+        # Queue control
+        self._queue_paused = False
+        self._queue_lock = Lock()
+        self._max_concurrent_downloads = max_concurrent_downloads  # Download multiple videos at once
+
+        # Active downloads tracking: {video_id: {"thread": Thread, "cancel_event": Event, "progress": dict}}
+        self._active_downloads: Dict[int, dict] = {}
+        self._downloads_lock = Lock()
 
     def init_app(self, app):
         """Initialize with Flask app."""
@@ -44,10 +59,10 @@ class DownloadScheduler:
             replace_existing=True,
         )
 
-        # Add job to process download queue
+        # Add job to process download queue - check every 30 seconds for faster starts
         self.scheduler.add_job(
             self._process_download_queue,
-            IntervalTrigger(minutes=5),
+            IntervalTrigger(seconds=30),
             id='process_downloads',
             name='Process pending downloads',
             replace_existing=True,
@@ -63,6 +78,64 @@ class DownloadScheduler:
             self.scheduler.shutdown(wait=False)
             self._is_running = False
             logger.info('Download scheduler stopped')
+
+    # ==================== Queue Control API ====================
+
+    def pause_queue(self):
+        """Pause the download queue (won't start new downloads)."""
+        with self._queue_lock:
+            self._queue_paused = True
+            logger.info('Download queue paused')
+
+    def resume_queue(self):
+        """Resume the download queue."""
+        with self._queue_lock:
+            self._queue_paused = False
+            logger.info('Download queue resumed')
+
+    def is_queue_paused(self) -> bool:
+        """Check if queue is paused."""
+        with self._queue_lock:
+            return self._queue_paused
+
+    def get_queue_status(self) -> dict:
+        """Get current queue status."""
+        with self._downloads_lock:
+            active = []
+            for video_id, info in self._active_downloads.items():
+                active.append({
+                    'video_id': video_id,
+                    'progress': info.get('progress', {}),
+                })
+
+        return {
+            'paused': self.is_queue_paused(),
+            'active_downloads': active,
+            'active_count': len(active),
+        }
+
+    def cancel_download(self, video_id: int) -> bool:
+        """Cancel an active download."""
+        with self._downloads_lock:
+            if video_id in self._active_downloads:
+                self._active_downloads[video_id]['cancel_event'].set()
+                logger.info(f'Cancellation requested for video {video_id}')
+                return True
+        return False
+
+    def cancel_all_downloads(self):
+        """Cancel all active downloads."""
+        with self._downloads_lock:
+            for video_id, info in self._active_downloads.items():
+                info['cancel_event'].set()
+            logger.info(f'Cancellation requested for all {len(self._active_downloads)} active downloads')
+
+    def get_active_download_ids(self) -> list:
+        """Get list of video IDs currently downloading."""
+        with self._downloads_lock:
+            return list(self._active_downloads.keys())
+
+    # ==================== Channel Checking ====================
 
     def _check_all_channels(self):
         """Check all enabled channels for new videos."""
@@ -81,14 +154,17 @@ class DownloadScheduler:
 
     def _check_channel(self, channel: Channel):
         """Check a single channel for new videos."""
+        logger.info(f'Starting check for channel: {channel.name} (platform: {channel.platform})')
         try:
             new_videos = []
 
             if channel.platform == 'youtube' and channel.rss_url:
                 # Use RSS for YouTube (faster)
+                logger.info(f'Using RSS for YouTube channel: {channel.name}')
                 new_videos = self._check_youtube_rss(channel)
             else:
                 # Fall back to yt-dlp for Rumble or YouTube without RSS
+                logger.info(f'Using yt-dlp for channel: {channel.name} (URL: {channel.url})')
                 new_videos = self._check_via_ytdlp(channel)
 
             # Log the check
@@ -166,17 +242,26 @@ class DownloadScheduler:
 
     def _check_via_ytdlp(self, channel: Channel) -> list:
         """Check channel via yt-dlp (for Rumble or fallback)."""
+        logger.info(f'Fetching videos from {channel.url} via yt-dlp...')
         videos = self.downloader.get_channel_videos(
             channel.url,
             max_videos=channel.backfill_limit if channel.backfill_enabled else 20
         )
+        logger.info(f'yt-dlp returned {len(videos)} videos for {channel.name}')
+
+        # Log first video data for debugging
+        if videos:
+            logger.info(f'Sample video data: {videos[0]}')
 
         new_videos = []
 
-        for video_data in videos:
+        for idx, video_data in enumerate(videos):
             video_id = video_data.get('video_id')
             if not video_id:
+                logger.debug(f'Skipping video {idx}: no video_id. Data: {video_data}')
                 continue
+
+            logger.debug(f'Processing video {idx}: {video_id} - {video_data.get("title", "Unknown")}')
 
             # Check if we already have this video
             existing = Video.query.filter_by(
@@ -185,13 +270,20 @@ class DownloadScheduler:
             ).first()
 
             if existing:
+                logger.debug(f'Video {video_id} already exists, skipping')
                 continue
 
             # Get full metadata if needed
             video_url = video_data.get('url')
             duration = video_data.get('duration')
 
-            if not duration:
+            # Build proper URL for Rumble if needed
+            if video_url and not video_url.startswith('http'):
+                video_url = f'https://rumble.com{video_url}' if video_url.startswith('/') else f'https://rumble.com/{video_url}'
+                logger.debug(f'Fixed video URL: {video_url}')
+
+            if not duration and video_url:
+                logger.debug(f'Fetching metadata for {video_url}')
                 metadata = self.downloader.get_video_metadata(video_url)
                 if metadata:
                     duration = metadata.get('duration')
@@ -225,6 +317,9 @@ class DownloadScheduler:
 
             db.session.add(video)
             new_videos.append(video)
+            logger.info(f'Added video: {video_id} - {video_data.get("title", "Unknown")[:50]}')
+
+        logger.info(f'Processed {len(videos)} videos, found {len(new_videos)} new videos to add')
 
         if new_videos:
             channel.video_count = Video.query.filter_by(channel_id=channel.id).count()
@@ -232,30 +327,113 @@ class DownloadScheduler:
 
         return new_videos
 
+    # ==================== Download Processing ====================
+
     def _process_download_queue(self):
-        """Process pending downloads."""
+        """Process pending downloads with concurrent download support."""
+        # Check if queue is paused
+        if self.is_queue_paused():
+            logger.debug('Queue is paused, skipping download processing')
+            return
+
         with self.app.app_context():
-            # Get pending videos (oldest first)
+            # Check how many downloads are currently active
+            with self._downloads_lock:
+                active_count = len(self._active_downloads)
+
+            # Calculate how many more downloads we can start
+            slots_available = self._max_concurrent_downloads - active_count
+            if slots_available <= 0:
+                logger.debug(f'Max concurrent downloads reached ({active_count}/{self._max_concurrent_downloads})')
+                return
+
+            # Get pending videos ordered by priority (desc), then discovered_at (asc)
             pending = Video.query.filter_by(status='pending')\
-                .order_by(Video.discovered_at.asc())\
-                .limit(5).all()
+                .order_by(Video.priority.desc(), Video.discovered_at.asc())\
+                .limit(slots_available).all()
 
             for video in pending:
-                self._download_video(video)
+                # Check again if paused (could have been paused while iterating)
+                if self.is_queue_paused():
+                    break
 
-    def _download_video(self, video: Video):
-        """Download a single video."""
+                # Check if already downloading
+                with self._downloads_lock:
+                    if video.id in self._active_downloads:
+                        continue
+
+                # Start download in background thread
+                cancel_event = Event()
+                thread = Thread(target=self._download_video_thread, args=(video.id, cancel_event))
+                thread.daemon = True
+                thread.start()
+
+                logger.info(f'Started concurrent download for video {video.id}: {video.title}')
+
+    def _download_video_thread(self, video_id: int, cancel_event: Event):
+        """Thread wrapper for downloading a video with proper app context."""
+        try:
+            with self.app.app_context():
+                video = Video.query.get(video_id)
+                if video and video.status == 'pending':
+                    self._download_video(video, cancel_event)
+        except Exception as e:
+            logger.error(f'Error in download thread for video {video_id}: {e}', exc_info=True)
+
+    def _download_video(self, video: Video, cancel_event: Event = None):
+        """Download a single video with cancellation support."""
         channel = video.channel
+
+        # Create cancel event if not provided
+        if cancel_event is None:
+            cancel_event = Event()
+
+        # Track this download
+        with self._downloads_lock:
+            self._active_downloads[video.id] = {
+                'cancel_event': cancel_event,
+                'progress': {'status': 'starting', 'percent': 0},
+            }
 
         logger.info(f'Downloading: {video.title}')
         video.status = 'downloading'
         db.session.commit()
 
+        def progress_hook(d):
+            """Progress hook that checks for cancellation."""
+            # Check for cancellation
+            if cancel_event.is_set():
+                raise DownloadCancelled(f"Download cancelled for video {video.id}")
+
+            # Update progress
+            with self._downloads_lock:
+                if video.id in self._active_downloads:
+                    if d['status'] == 'downloading':
+                        total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                        downloaded = d.get('downloaded_bytes', 0)
+                        percent = (downloaded / total * 100) if total > 0 else 0
+                        speed = d.get('speed', 0)
+                        eta = d.get('eta', 0)
+                        self._active_downloads[video.id]['progress'] = {
+                            'status': 'downloading',
+                            'percent': round(percent, 1),
+                            'downloaded': downloaded,
+                            'total': total,
+                            'speed': speed,
+                            'eta': eta,
+                        }
+                    elif d['status'] == 'finished':
+                        self._active_downloads[video.id]['progress'] = {
+                            'status': 'processing',
+                            'percent': 100,
+                        }
+
         try:
             result = self.downloader.download_video(
                 video.url,
                 channel.name,
-                max_quality=channel.quality
+                max_quality=channel.quality,
+                progress_callback=progress_hook
             )
 
             if result['success']:
@@ -276,6 +454,15 @@ class DownloadScheduler:
 
             db.session.commit()
 
+        except DownloadCancelled:
+            video.status = 'pending'  # Back to pending so it can be retried
+            video.error_message = 'Cancelled by user'
+            db.session.commit()
+
+            self._log_action(channel.id, video.id, 'cancel',
+                           f'Download cancelled: {video.title}')
+            logger.info(f'Download cancelled for video {video.id}')
+
         except Exception as e:
             video.status = 'failed'
             video.error_message = str(e)
@@ -283,6 +470,11 @@ class DownloadScheduler:
 
             self._log_action(channel.id, video.id, 'error',
                            f'Download exception: {e}')
+
+        finally:
+            # Remove from active downloads
+            with self._downloads_lock:
+                self._active_downloads.pop(video.id, None)
 
     def _log_action(self, channel_id: int, video_id: int, action: str,
                     message: str, details: dict = None):
@@ -297,25 +489,48 @@ class DownloadScheduler:
         db.session.add(log)
         db.session.commit()
 
+    # ==================== Manual Triggers ====================
+
     def check_channel_now(self, channel_id: int):
         """Manually trigger a channel check."""
-        with self.app.app_context():
-            channel = Channel.query.get(channel_id)
-            if channel:
-                Thread(target=self._check_channel, args=(channel,)).start()
+        def do_check():
+            try:
+                with self.app.app_context():
+                    logger.info(f'Manual check triggered for channel {channel_id}')
+                    channel = Channel.query.get(channel_id)
+                    if channel:
+                        self._check_channel(channel)
+                    else:
+                        logger.warning(f'Channel {channel_id} not found')
+            except Exception as e:
+                logger.error(f'Error in check_channel_now thread: {e}', exc_info=True)
+        Thread(target=do_check).start()
 
     def download_video_now(self, video_id: int):
         """Manually trigger a video download."""
-        with self.app.app_context():
-            video = Video.query.get(video_id)
-            if video and video.status in ('pending', 'failed'):
-                Thread(target=self._download_video, args=(video,)).start()
+        def do_download():
+            try:
+                with self.app.app_context():
+                    logger.info(f'Manual download triggered for video {video_id}')
+                    video = Video.query.get(video_id)
+                    if video and video.status in ('pending', 'failed'):
+                        cancel_event = Event()
+                        self._download_video(video, cancel_event)
+            except Exception as e:
+                logger.error(f'Error in download_video_now thread: {e}', exc_info=True)
+        Thread(target=do_download).start()
 
     def backfill_channel(self, channel_id: int):
         """Trigger backfill for a channel."""
-        with self.app.app_context():
-            channel = Channel.query.get(channel_id)
-            if channel:
-                channel.backfill_enabled = True
-                db.session.commit()
-                Thread(target=self._check_channel, args=(channel,)).start()
+        def do_backfill():
+            try:
+                with self.app.app_context():
+                    logger.info(f'Backfill triggered for channel {channel_id}')
+                    channel = Channel.query.get(channel_id)
+                    if channel:
+                        channel.backfill_enabled = True
+                        db.session.commit()
+                        self._check_channel(channel)
+            except Exception as e:
+                logger.error(f'Error in backfill_channel thread: {e}', exc_info=True)
+        Thread(target=do_backfill).start()

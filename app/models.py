@@ -84,6 +84,7 @@ class Video(db.Model):
 
     # Download status
     status = db.Column(db.String(50), default='pending')  # pending, downloading, completed, failed, skipped
+    priority = db.Column(db.Integer, default=0)  # Higher = download first
     downloaded_at = db.Column(db.DateTime)
     file_path = db.Column(db.String(1024))
     file_size = db.Column(db.BigInteger)  # Bytes
@@ -114,6 +115,7 @@ class Video(db.Model):
             'is_clip': self.is_clip,
             'classification_reason': self.classification_reason,
             'status': self.status,
+            'priority': self.priority,
             'downloaded_at': self.downloaded_at.isoformat() if self.downloaded_at else None,
             'file_path': self.file_path,
             'file_size': self.file_size,
