@@ -1,6 +1,7 @@
 """Flask routes for the web UI and API."""
 
-from flask import Blueprint, render_template, request, jsonify, current_app
+import os
+from flask import Blueprint, render_template, request, jsonify, current_app, send_file, abort
 from .models import db, Channel, Video, DownloadLog
 from .downloader import VideoDownloader
 
@@ -403,11 +404,39 @@ def api_bulk_priority():
     return jsonify({'message': f'Updated priority for {count} videos'})
 
 
+@bp.route('/api/videos/<int:video_id>/play')
+def api_play_video(video_id):
+    """Stream the downloaded video file for playback."""
+    video = Video.query.get_or_404(video_id)
+
+    if not video.file_path:
+        abort(404, description='No file path recorded for this video')
+
+    if not os.path.exists(video.file_path):
+        abort(404, description='Video file not found on disk')
+
+    # Determine mimetype based on extension
+    ext = os.path.splitext(video.file_path)[1].lower()
+    mimetypes = {
+        '.mp4': 'video/mp4',
+        '.mkv': 'video/x-matroska',
+        '.webm': 'video/webm',
+        '.avi': 'video/x-msvideo',
+        '.mov': 'video/quicktime',
+    }
+    mimetype = mimetypes.get(ext, 'video/mp4')
+
+    return send_file(
+        video.file_path,
+        mimetype=mimetype,
+        as_attachment=False,
+        download_name=os.path.basename(video.file_path)
+    )
+
+
 @bp.route('/api/videos/<int:video_id>/delete-file', methods=['POST'])
 def api_delete_video_file(video_id):
     """Delete the downloaded video file from disk."""
-    import os
-
     video = Video.query.get_or_404(video_id)
 
     if not video.file_path:

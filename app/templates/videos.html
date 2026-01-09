@@ -151,9 +151,12 @@
                                 {% endif %}
                             </div>
                             <div class="detail-actions">
-                                <button class="btn btn-secondary" onclick="openVideo({{ video.id }}, '{{ video.url }}')">Open in Browser</button>
                                 {% if video.status == 'completed' and video.file_path %}
+                                <button class="btn btn-success" onclick="playVideo({{ video.id }})">Play Video</button>
+                                <button class="btn btn-secondary" onclick="openSourceUrl('{{ video.url }}')">Open Source</button>
                                 <button class="btn btn-danger" onclick="deleteVideoFile({{ video.id }})">Delete File</button>
+                                {% else %}
+                                <button class="btn btn-secondary" onclick="openSourceUrl('{{ video.url }}')">Open in Browser</button>
                                 {% endif %}
                                 {% if video.status in ['pending', 'failed', 'skipped'] %}
                                 <button class="btn btn-primary" onclick="downloadVideo({{ video.id }})">Download Now</button>
@@ -249,9 +252,14 @@ async function setPriority(id, priority) {
     }
 }
 
-function openVideo(id, fallbackUrl) {
-    // Open the video URL in a new tab
-    window.open(fallbackUrl, '_blank');
+function playVideo(id) {
+    // Open the downloaded video file in a new tab for playback
+    window.open(`/api/videos/${id}/play`, '_blank');
+}
+
+function openSourceUrl(url) {
+    // Open the source video URL in a new tab
+    window.open(url, '_blank');
 }
 
 async function deleteVideoFile(id) {
