@@ -3,12 +3,23 @@
 import os
 import re
 import logging
+import signal
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse, urljoin
 
 import yt_dlp
 
 logger = logging.getLogger(__name__)
+
+
+class TimeoutError(Exception):
+    """Raised when an operation times out."""
+    pass
+
+
+def timeout_handler(signum, frame):
+    raise TimeoutError("Operation timed out")
 
 
 class VideoDownloader:
@@ -40,43 +51,137 @@ class VideoDownloader:
             'extract_flat': False,
         }
 
-    def extract_channel_info(self, url: str) -> Optional[dict]:
+    def _clean_url(self, url: str) -> str:
+        """Clean URL by removing query params and normalizing."""
+        parsed = urlparse(url)
+        # Remove query string and fragment
+        clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        # Remove trailing slashes
+        return clean.rstrip('/')
+
+    def _parse_rumble_url(self, url: str) -> Optional[dict]:
+        """
+        Parse Rumble URL to extract channel info directly.
+
+        Rumble URL formats:
+        - Channel: https://rumble.com/c/channelname or https://rumble.com/c/channelname/videos
+        - User: https://rumble.com/user/username
+        - Video: https://rumble.com/v123abc-video-title.html
+        """
+        parsed = urlparse(url)
+        if 'rumble.com' not in parsed.netloc:
+            return None
+
+        path = parsed.path.strip('/')
+        parts = path.split('/')
+
+        if not parts:
+            return None
+
+        # Channel URL: /c/channelname or /c/channelname/videos
+        if parts[0] == 'c' and len(parts) >= 2:
+            channel_name = parts[1]
+            channel_url = f"https://rumble.com/c/{channel_name}"
+            return {
+                'name': channel_name,
+                'url': channel_url,
+                'platform': 'rumble',
+                'channel_id': channel_name,
+                'rss_url': None,
+                'thumbnail': None,
+                'video_title': None,
+                'video_id': None,
+                'is_channel_url': True,
+            }
+
+        # User URL: /user/username
+        if parts[0] == 'user' and len(parts) >= 2:
+            username = parts[1]
+            user_url = f"https://rumble.com/user/{username}"
+            return {
+                'name': username,
+                'url': user_url,
+                'platform': 'rumble',
+                'channel_id': username,
+                'rss_url': None,
+                'thumbnail': None,
+                'video_title': None,
+                'video_id': None,
+                'is_channel_url': True,
+            }
+
+        # Video URL: /v123abc-video-title.html
+        if parts[0].startswith('v') and parts[0].endswith('.html'):
+            # This is a video URL - need to use yt-dlp to get channel info
+            return None
+
+        return None
+
+    def extract_channel_info(self, url: str, timeout_seconds: int = 30) -> Optional[dict]:
         """Extract channel info from a video or channel URL."""
+        # Clean the URL first
+        clean_url = self._clean_url(url)
+
+        # Try to parse Rumble URLs directly (faster, avoids timeout)
+        rumble_info = self._parse_rumble_url(clean_url)
+        if rumble_info and rumble_info.get('is_channel_url'):
+            logger.info(f"Parsed Rumble channel URL directly: {rumble_info['name']}")
+            return rumble_info
+
+        # For video URLs or YouTube, use yt-dlp with timeout
         opts = self._get_base_opts()
+        opts['socket_timeout'] = timeout_seconds
 
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            # Set up timeout using signal (Unix only)
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
 
-                if not info:
-                    return None
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(clean_url, download=False)
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
 
-                # Detect platform
-                platform = self._detect_platform(url, info)
+            if not info:
+                return None
 
-                # Extract channel details
-                channel_id = info.get('channel_id') or info.get('uploader_id')
-                channel_url = info.get('channel_url') or info.get('uploader_url')
-                channel_name = info.get('channel') or info.get('uploader')
+            # Detect platform
+            platform = self._detect_platform(clean_url, info)
 
-                # Build RSS URL for YouTube
-                rss_url = None
-                if platform == 'youtube' and channel_id:
-                    rss_url = f'https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}'
+            # Extract channel details
+            channel_id = info.get('channel_id') or info.get('uploader_id')
+            channel_url = info.get('channel_url') or info.get('uploader_url')
+            channel_name = info.get('channel') or info.get('uploader')
 
-                return {
-                    'name': channel_name,
-                    'url': channel_url or url,
-                    'platform': platform,
-                    'channel_id': channel_id,
-                    'rss_url': rss_url,
-                    'thumbnail': info.get('thumbnail'),
-                    # If this was a video URL, include video info
-                    'video_title': info.get('title') if info.get('id') else None,
-                    'video_id': info.get('id'),
-                }
+            # Build RSS URL for YouTube
+            rss_url = None
+            if platform == 'youtube' and channel_id:
+                rss_url = f'https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}'
+
+            return {
+                'name': channel_name,
+                'url': channel_url or clean_url,
+                'platform': platform,
+                'channel_id': channel_id,
+                'rss_url': rss_url,
+                'thumbnail': info.get('thumbnail'),
+                # If this was a video URL, include video info
+                'video_title': info.get('title') if info.get('id') else None,
+                'video_id': info.get('id'),
+            }
+        except TimeoutError:
+            logger.warning(f'Timeout extracting channel info from {url}')
+            # For Rumble, try to parse the URL directly as fallback
+            if 'rumble.com' in url:
+                return self._parse_rumble_url(clean_url)
+            return None
         except Exception as e:
             logger.error(f'Error extracting channel info from {url}: {e}')
+            # For Rumble, try to parse the URL directly as fallback
+            if 'rumble.com' in url:
+                return self._parse_rumble_url(clean_url)
             return None
 
     def _detect_platform(self, url: str, info: dict) -> str:
