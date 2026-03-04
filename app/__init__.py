@@ -3,9 +3,12 @@
 import os
 import logging
 from flask import Flask
+from flask_migrate import Migrate
 from .models import db
 from .routes import bp
 from .scheduler import DownloadScheduler
+
+migrate = Migrate()
 
 # Configure logging
 logging.basicConfig(
@@ -31,10 +34,11 @@ def create_app(config=None):
     if config:
         app.config.update(config)
 
-    # Initialize database
+    # Initialize database and migrations
     db.init_app(app)
+    migrate.init_app(app, db)
 
-    # Create tables
+    # Create tables (for fresh installs without migrations)
     with app.app_context():
         db.create_all()
 
