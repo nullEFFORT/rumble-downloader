@@ -4,3 +4,4 @@ yt-dlp>=2024.1.0
 apscheduler>=3.10.0
 feedparser>=6.0.0
 gunicorn>=21.0.0
+curl-cffi>=0.7.0
