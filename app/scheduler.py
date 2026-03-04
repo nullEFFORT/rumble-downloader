@@ -1,5 +1,6 @@
 """Background scheduler for channel checking and video downloading."""
 
+import fcntl
 import logging
 from datetime import datetime, timedelta
 from threading import Thread, Event, Lock
@@ -46,8 +47,18 @@ class DownloadScheduler:
         self.downloader = VideoDownloader(self.download_path)
 
     def start(self):
-        """Start the scheduler."""
+        """Start the scheduler with file lock to prevent duplicate instances."""
         if self._is_running:
+            return
+
+        # Acquire file lock to prevent multiple scheduler instances (e.g. gunicorn preforking)
+        lock_path = '/tmp/rumble-downloader-scheduler.lock'
+        self._lock_file = open(lock_path, 'w')
+        try:
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            logger.info('Another scheduler instance holds the lock, skipping start')
+            self._lock_file.close()
             return
 
         # Add job to check all channels periodically
@@ -73,10 +84,13 @@ class DownloadScheduler:
         logger.info('Download scheduler started')
 
     def stop(self):
-        """Stop the scheduler."""
+        """Stop the scheduler and release the file lock."""
         if self._is_running:
             self.scheduler.shutdown(wait=False)
             self._is_running = False
+            if hasattr(self, '_lock_file') and self._lock_file:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                self._lock_file.close()
             logger.info('Download scheduler stopped')
 
     # ==================== Queue Control API ====================
