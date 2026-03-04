@@ -1,11 +1,22 @@
 """Flask routes for the web UI and API."""
 
 import os
-from flask import Blueprint, render_template, request, jsonify, current_app, send_file, abort
+from flask import Blueprint, render_template, request, jsonify, current_app, send_file, abort, session, redirect, url_for
 from .models import db, Channel, Video, DownloadLog
 from .downloader import VideoDownloader
+from .auth import is_auth_enabled
 
 bp = Blueprint('main', __name__)
+
+
+@bp.before_request
+def check_auth():
+    """Require login for all routes when auth is enabled."""
+    if is_auth_enabled() and not session.get('authenticated'):
+        # Allow health check endpoint without auth
+        if request.endpoint == 'main.api_stats':
+            return
+        return redirect(url_for('auth.login', next=request.url))
 
 
 @bp.route('/')
@@ -109,6 +120,7 @@ def api_add_channel():
         backfill_enabled=data.get('backfill_enabled', False),
         backfill_limit=data.get('backfill_limit', 50),
         quality=data.get('quality', '1080'),
+        audio_only=data.get('audio_only', False),
         check_interval_hours=data.get('check_interval_hours', 6),
     )
 
@@ -138,7 +150,8 @@ def api_update_channel(channel_id):
 
     # Update allowed fields
     for field in ['name', 'enabled', 'download_clips', 'clip_threshold_seconds',
-                  'backfill_enabled', 'backfill_limit', 'quality', 'check_interval_hours']:
+                  'backfill_enabled', 'backfill_limit', 'quality', 'audio_only',
+                  'check_interval_hours']:
         if field in data:
             setattr(channel, field, data[field])
 
@@ -481,3 +494,20 @@ def api_get_video_open_url(video_id):
             'type': 'url',
             'url': video.url
         })
+
+
+@bp.route('/api/videos/<int:video_id>/clip', methods=['POST'])
+def api_set_clip(video_id):
+    """Set timestamp clipping for a video."""
+    video = Video.query.get_or_404(video_id)
+    data = request.get_json()
+
+    video.clip_start = data.get('clip_start')
+    video.clip_end = data.get('clip_end')
+    db.session.commit()
+
+    return jsonify({
+        'message': 'Clip timestamps set',
+        'clip_start': video.clip_start,
+        'clip_end': video.clip_end,
+    })

@@ -12,6 +12,8 @@ import feedparser
 
 from .models import db, Channel, Video, DownloadLog
 from .downloader import VideoDownloader
+from .rumble_extractor import RumbleExtractor
+from .notifications import NotificationManager
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,8 @@ class DownloadScheduler:
     def __init__(self, app=None, download_path: str = '/downloads', max_concurrent_downloads: int = 2):
         self.scheduler = BackgroundScheduler()
         self.downloader = VideoDownloader(download_path)
+        self.rumble_extractor = RumbleExtractor()
+        self.notifier = NotificationManager()
         self.app = app
         self.download_path = download_path
         self._is_running = False
@@ -177,8 +181,12 @@ class DownloadScheduler:
                 # Use RSS for YouTube (faster)
                 logger.info(f'Using RSS for YouTube channel: {channel.name}')
                 new_videos = self._check_youtube_rss(channel)
+            elif channel.platform == 'rumble':
+                # Use direct Rumble embedJS API (faster, bypasses Cloudflare)
+                logger.info(f'Using Rumble extractor for channel: {channel.name}')
+                new_videos = self._check_via_rumble_api(channel)
             else:
-                # Fall back to yt-dlp for Rumble or YouTube without RSS
+                # Fall back to yt-dlp for YouTube without RSS
                 logger.info(f'Using yt-dlp for channel: {channel.name} (URL: {channel.url})')
                 new_videos = self._check_via_ytdlp(channel)
 
@@ -194,6 +202,7 @@ class DownloadScheduler:
             logger.error(f'Error checking channel {channel.name}: {e}')
             self._log_action(channel.id, None, 'error',
                            f'Error checking channel: {e}')
+            self.notifier.notify_channel_error(channel.name, str(e))
 
     def _check_youtube_rss(self, channel: Channel) -> list:
         """Check YouTube RSS feed for new videos."""
@@ -252,6 +261,77 @@ class DownloadScheduler:
         if new_videos:
             channel.video_count = Video.query.filter_by(channel_id=channel.id).count()
             db.session.commit()
+
+            self.notifier.notify_new_videos(
+                channel.name,
+                len(new_videos),
+                [v.title for v in new_videos[:5]]
+            )
+
+        return new_videos
+
+    def _check_via_rumble_api(self, channel: Channel) -> list:
+        """Check Rumble channel using direct embedJS API."""
+        videos = self.rumble_extractor.get_channel_videos(
+            channel.url,
+            max_videos=channel.backfill_limit if channel.backfill_enabled else 20
+        )
+        logger.info(f'Rumble API returned {len(videos)} videos for {channel.name}')
+
+        new_videos = []
+        for video_data in videos:
+            video_id = video_data.get('video_id')
+            if not video_id:
+                continue
+
+            existing = Video.query.filter_by(
+                channel_id=channel.id,
+                video_id=video_id
+            ).first()
+            if existing:
+                continue
+
+            video_url = video_data.get('url')
+            duration = video_data.get('duration')
+
+            is_clip, reason = self.downloader.classify_video(
+                video_data.get('title', ''),
+                duration or 0,
+                channel.clip_threshold_seconds
+            )
+
+            if is_clip and not channel.download_clips:
+                status = 'skipped'
+            else:
+                status = 'pending'
+
+            video = Video(
+                video_id=video_id,
+                channel_id=channel.id,
+                title=video_data.get('title'),
+                url=video_url,
+                duration=duration,
+                upload_date=video_data.get('upload_date'),
+                thumbnail_url=video_data.get('thumbnail_url'),
+                is_clip=is_clip,
+                classification_reason=reason,
+                status=status,
+            )
+
+            db.session.add(video)
+            new_videos.append(video)
+            logger.info(f'Added video: {video_id} - {video_data.get("title", "Unknown")[:50]}')
+
+        if new_videos:
+            channel.video_count = Video.query.filter_by(channel_id=channel.id).count()
+            db.session.commit()
+
+            # Send notification for new videos
+            self.notifier.notify_new_videos(
+                channel.name,
+                len(new_videos),
+                [v.title for v in new_videos[:5]]
+            )
 
         return new_videos
 
@@ -339,6 +419,12 @@ class DownloadScheduler:
         if new_videos:
             channel.video_count = Video.query.filter_by(channel_id=channel.id).count()
             db.session.commit()
+
+            self.notifier.notify_new_videos(
+                channel.name,
+                len(new_videos),
+                [v.title for v in new_videos[:5]]
+            )
 
         return new_videos
 
@@ -449,6 +535,9 @@ class DownloadScheduler:
                 video.url,
                 channel.name,
                 max_quality=channel.quality,
+                audio_only=channel.audio_only,
+                clip_start=video.clip_start,
+                clip_end=video.clip_end,
                 progress_callback=progress_hook
             )
 
@@ -461,12 +550,22 @@ class DownloadScheduler:
                 self._log_action(channel.id, video.id, 'download',
                                f'Downloaded: {video.title}',
                                {'file_size': result['file_size']})
+
+                self.notifier.notify_download_complete(
+                    video.title, channel.name,
+                    file_size=result['file_size'],
+                    duration=video.duration
+                )
             else:
                 video.status = 'failed'
                 video.error_message = result['error']
 
                 self._log_action(channel.id, video.id, 'error',
                                f'Download failed: {result["error"]}')
+
+                self.notifier.notify_download_failed(
+                    video.title, channel.name, result['error']
+                )
 
             db.session.commit()
 
