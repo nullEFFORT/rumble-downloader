@@ -3,7 +3,7 @@
 import os
 import re
 import logging
-import signal
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse, urljoin
@@ -16,10 +16,6 @@ logger = logging.getLogger(__name__)
 class TimeoutError(Exception):
     """Raised when an operation times out."""
     pass
-
-
-def timeout_handler(signum, frame):
-    raise TimeoutError("Operation timed out")
 
 
 class VideoDownloader:
@@ -134,16 +130,18 @@ class VideoDownloader:
         opts['socket_timeout'] = timeout_seconds
 
         try:
-            # Set up timeout using signal (Unix only)
-            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout_seconds)
-
-            try:
+            # Thread-safe timeout (SIGALRM is not safe in multi-threaded gunicorn)
+            def _extract():
                 with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(clean_url, download=False)
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
+                    return ydl.extract_info(clean_url, download=False)
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_extract)
+                try:
+                    info = future.result(timeout=timeout_seconds)
+                except FutureTimeout:
+                    future.cancel()
+                    raise TimeoutError("Operation timed out")
 
             if not info:
                 return None

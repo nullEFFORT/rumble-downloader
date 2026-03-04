@@ -1,8 +1,10 @@
 """Optional authentication middleware for the Video Downloader."""
 
 import os
+import hmac
 import functools
 import logging
+from urllib.parse import urlparse, urljoin
 from flask import request, session, redirect, url_for, render_template, flash, Blueprint
 
 logger = logging.getLogger(__name__)
@@ -12,6 +14,13 @@ auth_bp = Blueprint('auth', __name__)
 # Auth is optional — enabled only when AUTH_USERNAME and AUTH_PASSWORD are set
 AUTH_USERNAME = os.environ.get('AUTH_USERNAME')
 AUTH_PASSWORD = os.environ.get('AUTH_PASSWORD')
+
+
+def _is_safe_url(target):
+    """Validate that target URL is safe for redirect (same host)."""
+    ref_url = urlparse(request.host_url)
+    test_url = urlparse(urljoin(request.host_url, target))
+    return test_url.scheme in ('http', 'https') and ref_url.netloc == test_url.netloc
 
 
 def is_auth_enabled() -> bool:
@@ -41,10 +50,13 @@ def login():
         username = request.form.get('username', '')
         password = request.form.get('password', '')
 
-        if username == AUTH_USERNAME and password == AUTH_PASSWORD:
+        if hmac.compare_digest(username, AUTH_USERNAME) and hmac.compare_digest(password, AUTH_PASSWORD):
             session['authenticated'] = True
             logger.info(f'User logged in from {request.remote_addr}')
             next_url = request.args.get('next', '/')
+            # Prevent open redirect — only allow relative URLs on same host
+            if not _is_safe_url(next_url):
+                next_url = '/'
             return redirect(next_url)
         else:
             logger.warning(f'Failed login attempt from {request.remote_addr}')

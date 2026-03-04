@@ -222,7 +222,7 @@ def api_videos():
     channel_id = request.args.get('channel_id', type=int)
     status = request.args.get('status')
     is_clip = request.args.get('is_clip', type=bool)
-    limit = request.args.get('limit', 100, type=int)
+    limit = min(request.args.get('limit', 100, type=int), 500)
 
     query = Video.query
 
@@ -283,7 +283,7 @@ def api_stats():
 @bp.route('/api/logs', methods=['GET'])
 def api_logs():
     """Get recent logs."""
-    limit = request.args.get('limit', 100, type=int)
+    limit = min(request.args.get('limit', 100, type=int), 500)
     logs = DownloadLog.query.order_by(DownloadLog.created_at.desc()).limit(limit).all()
     return jsonify([{
         'id': log.id,
@@ -417,6 +417,15 @@ def api_bulk_priority():
     return jsonify({'message': f'Updated priority for {count} videos'})
 
 
+def _validate_file_path(file_path):
+    """Validate file_path is within DOWNLOAD_PATH to prevent path traversal."""
+    download_path = current_app.config.get('DOWNLOAD_PATH', '/downloads')
+    real_path = os.path.realpath(file_path)
+    if not real_path.startswith(os.path.realpath(download_path) + os.sep):
+        abort(403, description='Access denied')
+    return real_path
+
+
 @bp.route('/api/videos/<int:video_id>/play')
 def api_play_video(video_id):
     """Stream the downloaded video file for playback."""
@@ -425,13 +434,16 @@ def api_play_video(video_id):
     if not video.file_path:
         abort(404, description='No file path recorded for this video')
 
-    if not os.path.exists(video.file_path):
+    real_path = _validate_file_path(video.file_path)
+
+    if not os.path.exists(real_path):
         abort(404, description='Video file not found on disk')
 
     # Determine mimetype based on extension
-    ext = os.path.splitext(video.file_path)[1].lower()
+    ext = os.path.splitext(real_path)[1].lower()
     mimetypes = {
         '.mp4': 'video/mp4',
+        '.mp3': 'audio/mpeg',
         '.mkv': 'video/x-matroska',
         '.webm': 'video/webm',
         '.avi': 'video/x-msvideo',
@@ -440,10 +452,10 @@ def api_play_video(video_id):
     mimetype = mimetypes.get(ext, 'video/mp4')
 
     return send_file(
-        video.file_path,
+        real_path,
         mimetype=mimetype,
         as_attachment=False,
-        download_name=os.path.basename(video.file_path)
+        download_name=os.path.basename(real_path)
     )
 
 
@@ -455,7 +467,9 @@ def api_delete_video_file(video_id):
     if not video.file_path:
         return jsonify({'error': 'No file path recorded for this video'}), 400
 
-    if not os.path.exists(video.file_path):
+    real_path = _validate_file_path(video.file_path)
+
+    if not os.path.exists(real_path):
         # File doesn't exist, just clear the database record
         video.file_path = None
         video.file_size = None
@@ -465,7 +479,7 @@ def api_delete_video_file(video_id):
         return jsonify({'message': 'File not found, cleared record'})
 
     try:
-        os.remove(video.file_path)
+        os.remove(real_path)
         video.file_path = None
         video.file_size = None
         video.status = 'pending'
