@@ -151,9 +151,14 @@ class VideoDownloader:
             platform = self._detect_platform(clean_url, info)
 
             # Extract channel details
+            # Rumble's yt-dlp extractor doesn't set channel_id/uploader_id,
+            # so fall back to extracting from channel_url or uploader_url
             channel_id = info.get('channel_id') or info.get('uploader_id')
             channel_url = info.get('channel_url') or info.get('uploader_url')
             channel_name = info.get('channel') or info.get('uploader')
+
+            if not channel_id and channel_url:
+                channel_id = self._extract_channel_id_from_url(channel_url)
 
             # Build RSS URL for YouTube
             rss_url = None
@@ -216,7 +221,13 @@ class VideoDownloader:
                     'view_count': info.get('view_count'),
                     'description': info.get('description'),
                     'channel_name': info.get('channel') or info.get('uploader'),
-                    'channel_id': info.get('channel_id') or info.get('uploader_id'),
+                    'channel_id': (
+                        info.get('channel_id')
+                        or info.get('uploader_id')
+                        or self._extract_channel_id_from_url(
+                            info.get('channel_url') or info.get('uploader_url') or ''
+                        )
+                    ),
                 }
         except Exception as e:
             logger.error(f'Error getting video metadata for {url}: {e}')
@@ -266,6 +277,29 @@ class VideoDownloader:
             logger.error(f'Error getting channel videos from {channel_url}: {e}')
 
         return videos
+
+    def _extract_channel_id_from_url(self, url: str) -> Optional[str]:
+        """Extract channel identifier from a channel URL.
+
+        Works for both Rumble and YouTube channel URLs:
+        - https://rumble.com/c/ChannelName -> ChannelName
+        - https://rumble.com/user/UserName -> UserName
+        - https://www.youtube.com/channel/UC... -> UC...
+        - https://www.youtube.com/@handle -> @handle
+        """
+        if not url:
+            return None
+        try:
+            parsed = urlparse(url)
+            path = parsed.path.strip('/')
+            parts = path.split('/')
+            if len(parts) >= 2 and parts[0] in ('c', 'user', 'channel'):
+                return parts[1]
+            if parts and parts[-1].startswith('@'):
+                return parts[-1]
+        except Exception:
+            pass
+        return None
 
     def _extract_rumble_video_id(self, url: str) -> Optional[str]:
         """Extract video ID from Rumble URL.
