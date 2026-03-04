@@ -5,6 +5,7 @@ import logging
 from flask import Flask
 from flask_migrate import Migrate
 from .models import db
+from .auth import auth_bp, is_auth_enabled
 from .routes import bp
 from .scheduler import DownloadScheduler
 
@@ -43,6 +44,7 @@ def create_app(config=None):
         db.create_all()
 
     # Register routes
+    app.register_blueprint(auth_bp)
     app.register_blueprint(bp)
 
     # Initialize and start scheduler

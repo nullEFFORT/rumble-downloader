@@ -77,6 +77,10 @@
                     Download clips (short videos)
                 </label>
                 <label class="checkbox-label">
+                    <input type="checkbox" name="audio_only" id="audio-only">
+                    Audio only (MP3)
+                </label>
+                <label class="checkbox-label">
                     <input type="checkbox" name="backfill_enabled" id="backfill-enabled">
                     Backfill existing videos
                 </label>
@@ -197,6 +201,7 @@ document.getElementById('add-channel-form').addEventListener('submit', async (e)
     const payload = {
         url: discoveredChannel.url,
         download_clips: document.getElementById('download-clips').checked,
+        audio_only: document.getElementById('audio-only').checked,
         backfill_enabled: document.getElementById('backfill-enabled').checked,
         clip_threshold_seconds: parseInt(document.getElementById('clip-threshold').value),
         check_interval_hours: parseInt(document.getElementById('check-interval').value),

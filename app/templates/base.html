@@ -16,6 +16,9 @@
             <li><a href="/channels" class="{% if request.endpoint == 'main.channels_list' %}active{% endif %}">Channels</a></li>
             <li><a href="/videos" class="{% if request.endpoint == 'main.videos_list' %}active{% endif %}">Videos</a></li>
             <li><a href="/logs" class="{% if request.endpoint == 'main.logs_list' %}active{% endif %}">Logs</a></li>
+            {% if session.get('authenticated') %}
+            <li><a href="/logout">Logout</a></li>
+            {% endif %}
         </ul>
     </nav>
 

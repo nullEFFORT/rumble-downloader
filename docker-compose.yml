@@ -13,6 +13,11 @@ services:
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - DATABASE_URL=sqlite:////data/videodownloader.db
       - DOWNLOAD_PATH=/downloads
+      # Optional: set to enable login requirement
+      # - AUTH_USERNAME=admin
+      # - AUTH_PASSWORD=changeme
+      # Optional: Discord webhook for download notifications
+      # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
     labels:
       - "homelab.service=video-downloader"
       - "homelab.description=YouTube/Rumble video downloader with web UI"

@@ -345,9 +345,12 @@ class VideoDownloader:
 
     def download_video(self, url: str, channel_name: str,
                        max_quality: str = None,
+                       audio_only: bool = False,
+                       clip_start: str = None,
+                       clip_end: str = None,
                        progress_callback: callable = None) -> dict:
         """
-        Download a video.
+        Download a video (or audio-only when audio_only=True).
 
         Returns:
             {
@@ -366,32 +369,67 @@ class VideoDownloader:
         # Output template
         outtmpl = os.path.join(channel_dir, '%(upload_date)s - %(title)s.%(ext)s')
 
-        # Format selection based on quality
-        format_spec = self._get_format_spec(quality)
+        if audio_only:
+            format_spec = self._get_audio_format_spec()
+            opts = {
+                'format': format_spec,
+                'outtmpl': outtmpl,
+                'quiet': True,
+                'no_warnings': True,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                # Speed optimizations
+                'concurrent_fragment_downloads': 4,
+                'buffersize': 1024 * 64,
+                'http_chunk_size': 10485760,
+                'retries': 10,
+                'fragment_retries': 10,
+                'ratelimit': None,
+                'socket_timeout': 30,
+            }
+        else:
+            format_spec = self._get_format_spec(quality)
+            opts = {
+                'format': format_spec,
+                'outtmpl': outtmpl,
+                'quiet': True,
+                'no_warnings': True,
+                'merge_output_format': 'mp4',
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
+                # Speed optimizations - download multiple fragments simultaneously
+                'concurrent_fragment_downloads': 4,
+                # Buffer and chunk sizes for faster throughput
+                'buffersize': 1024 * 64,  # 64KB buffer
+                'http_chunk_size': 10485760,  # 10MB chunks
+                # Retries for reliability
+                'retries': 10,
+                'fragment_retries': 10,
+                # Don't limit download rate - let it go as fast as possible
+                'ratelimit': None,
+                # Network optimizations
+                'socket_timeout': 30,
+            }
 
-        opts = {
-            'format': format_spec,
-            'outtmpl': outtmpl,
-            'quiet': True,
-            'no_warnings': True,
-            'merge_output_format': 'mp4',
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-            # Speed optimizations - download multiple fragments simultaneously
-            'concurrent_fragment_downloads': 4,
-            # Buffer and chunk sizes for faster throughput
-            'buffersize': 1024 * 64,  # 64KB buffer
-            'http_chunk_size': 10485760,  # 10MB chunks
-            # Retries for reliability
-            'retries': 10,
-            'fragment_retries': 10,
-            # Don't limit download rate - let it go as fast as possible
-            'ratelimit': None,
-            # Network optimizations
-            'socket_timeout': 30,
-        }
+        # Timestamp clipping via yt-dlp download_ranges
+        if clip_start or clip_end:
+            start_sec = self._parse_timestamp(clip_start) if clip_start else None
+            end_sec = self._parse_timestamp(clip_end) if clip_end else None
+
+            def make_range(info_dict, ydl):
+                ranges = []
+                s = start_sec if start_sec is not None else 0
+                e = end_sec if end_sec is not None else float('inf')
+                ranges.append({'start_time': s, 'end_time': e})
+                return ranges
+
+            opts['download_ranges'] = make_range
+            opts['force_keyframes_at_cuts'] = True
 
         if progress_callback:
             opts['progress_hooks'] = [progress_callback]
@@ -410,20 +448,33 @@ class VideoDownloader:
                 if info:
                     # Get the actual downloaded file path
                     file_path = ydl.prepare_filename(info)
-                    # Handle extension change to mp4
                     base, ext = os.path.splitext(file_path)
-                    mp4_path = base + '.mp4'
 
-                    if os.path.exists(mp4_path):
-                        file_path = mp4_path
-                    elif os.path.exists(file_path):
-                        pass
+                    if audio_only:
+                        # FFmpegExtractAudio always outputs .mp3 when preferredcodec is mp3
+                        mp3_path = base + '.mp3'
+                        if os.path.exists(mp3_path):
+                            file_path = mp3_path
+                        elif os.path.exists(file_path):
+                            pass
+                        else:
+                            for audio_ext in ['.mp3', '.m4a', '.opus', '.ogg']:
+                                if os.path.exists(base + audio_ext):
+                                    file_path = base + audio_ext
+                                    break
                     else:
-                        # Try to find the file
-                        for ext in ['.mp4', '.mkv', '.webm']:
-                            if os.path.exists(base + ext):
-                                file_path = base + ext
-                                break
+                        # Handle extension change to mp4
+                        mp4_path = base + '.mp4'
+                        if os.path.exists(mp4_path):
+                            file_path = mp4_path
+                        elif os.path.exists(file_path):
+                            pass
+                        else:
+                            # Try to find the file
+                            for video_ext in ['.mp4', '.mkv', '.webm']:
+                                if os.path.exists(base + video_ext):
+                                    file_path = base + video_ext
+                                    break
 
                     result['success'] = True
                     result['file_path'] = file_path
@@ -450,6 +501,32 @@ class VideoDownloader:
             return 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]'
         else:
             return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+
+    def _get_audio_format_spec(self) -> str:
+        """Get yt-dlp format specification for audio-only download."""
+        return 'bestaudio[ext=m4a]/bestaudio/best'
+
+    @staticmethod
+    def _parse_timestamp(ts: str) -> float:
+        """Parse timestamp string to seconds. Accepts HH:MM:SS, MM:SS, or raw seconds."""
+        if not ts:
+            return 0
+        ts = ts.strip()
+        # Try raw seconds first
+        try:
+            return float(ts)
+        except ValueError:
+            pass
+        # Try HH:MM:SS or MM:SS
+        parts = ts.split(':')
+        try:
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            elif len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+        except (ValueError, IndexError):
+            pass
+        return 0
 
     def _sanitize_filename(self, name: str) -> str:
         """Sanitize string for use as filename."""
