@@ -12,6 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "flask>=3.0.0",
     "flask-sqlalchemy>=3.1.0",
+    "flask-migrate>=4.0.0",
     "yt-dlp>=2024.1.0",
     "apscheduler>=3.10.0",
     "feedparser>=6.0.0",

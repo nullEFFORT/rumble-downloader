@@ -26,6 +26,9 @@ class Channel(db.Model):
     backfill_limit = db.Column(db.Integer, default=50)  # Max videos to backfill
     quality = db.Column(db.String(50), default='1080')  # Max resolution
 
+    # Download mode
+    audio_only = db.Column(db.Boolean, default=False)  # Download audio only (mp3)
+
     # Schedule (cron-like)
     check_interval_hours = db.Column(db.Integer, default=6)
 
@@ -55,6 +58,7 @@ class Channel(db.Model):
             'backfill_enabled': self.backfill_enabled,
             'backfill_limit': self.backfill_limit,
             'quality': self.quality,
+            'audio_only': self.audio_only,
             'check_interval_hours': self.check_interval_hours,
             'last_checked': self.last_checked.isoformat() if self.last_checked else None,
             'video_count': self.video_count,
@@ -81,6 +85,10 @@ class Video(db.Model):
     # Classification
     is_clip = db.Column(db.Boolean, default=False)
     classification_reason = db.Column(db.String(255))  # Why it was classified as clip
+
+    # Timestamp clipping
+    clip_start = db.Column(db.String(20))  # HH:MM:SS or seconds
+    clip_end = db.Column(db.String(20))    # HH:MM:SS or seconds
 
     # Download status
     status = db.Column(db.String(50), default='pending')  # pending, downloading, completed, failed, skipped
@@ -114,6 +122,8 @@ class Video(db.Model):
             'thumbnail_url': self.thumbnail_url,
             'is_clip': self.is_clip,
             'classification_reason': self.classification_reason,
+            'clip_start': self.clip_start,
+            'clip_end': self.clip_end,
             'status': self.status,
             'priority': self.priority,
             'downloaded_at': self.downloaded_at.isoformat() if self.downloaded_at else None,

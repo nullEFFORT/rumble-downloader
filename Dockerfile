@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
+COPY migrations/ ./migrations/
 COPY run.py .
 
 # Create directories
@@ -39,5 +40,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/stats')" || exit 1
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "run:app"]
+# Run migrations then start gunicorn
+CMD flask db upgrade && gunicorn --bind 0.0.0.0:5000 --workers 1 --threads 8 run:app
