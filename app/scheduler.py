@@ -119,6 +119,7 @@ class DownloadScheduler:
             for video_id, info in self._active_downloads.items():
                 active.append({
                     'video_id': video_id,
+                    'title': info.get('title'),
                     'progress': info.get('progress', {}),
                 })
 
@@ -405,6 +406,7 @@ class DownloadScheduler:
         # Track this download
         with self._downloads_lock:
             self._active_downloads[video.id] = {
+                'title': video.title,
                 'cancel_event': cancel_event,
                 'progress': {'status': 'starting', 'percent': 0},
             }
