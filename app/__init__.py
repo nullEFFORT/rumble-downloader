@@ -41,15 +41,10 @@ def create_app(config=None):
     # Register routes
     app.register_blueprint(bp)
 
-    # Initialize scheduler
+    # Initialize and start scheduler
     scheduler = DownloadScheduler(download_path=app.config['DOWNLOAD_PATH'])
     scheduler.init_app(app)
     app.config['scheduler'] = scheduler
-
-    # Start scheduler when app starts
-    @app.before_request
-    def ensure_scheduler():
-        if not scheduler._is_running:
-            scheduler.start()
+    scheduler.start()
 
     return app
