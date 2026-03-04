@@ -44,11 +44,12 @@ class VideoDownloader:
         os.makedirs(download_path, exist_ok=True)
 
     def _get_base_opts(self) -> dict:
-        """Base yt-dlp options."""
+        """Base yt-dlp options with Cloudflare bypass."""
         return {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
+            'impersonate': 'chrome',
         }
 
     def _clean_url(self, url: str) -> str:

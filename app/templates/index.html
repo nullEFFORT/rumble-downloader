@@ -276,7 +276,7 @@ async function updateQueueStatus() {
                 return `
                     <div class="download-item">
                         <div class="download-info">
-                            <span class="download-id">Video #${dl.video_id}</span>
+                            <span class="download-title">${dl.title || 'Video #' + dl.video_id}</span>
                             <span class="download-stats">${speed} - ETA: ${eta}</span>
                         </div>
                         <div class="download-progress">
