@@ -1029,6 +1029,81 @@ input.readonly {
 .filter-group label {
     color: var(--text-secondary);
     font-size: 0.75rem;
+/* SSE connection indicator */
+.sse-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.sse-connected {
+    background: var(--success);
+    box-shadow: 0 0 4px var(--success);
+}
+
+.sse-connecting {
+    background: var(--warning);
+    animation: pulse 1.2s infinite;
+}
+
+.sse-fallback {
+    background: var(--error);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* Storage Dashboard Card */
+.storage-card {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin-bottom: 2rem;
+}
+
+.storage-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.storage-header h2 {
+    margin: 0;
+}
+
+.storage-path {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    background: var(--bg-dark);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.storage-stats {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1rem;
+}
+
+.storage-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.storage-stat-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
@@ -1100,6 +1175,91 @@ input.readonly {
 }
 
 /* ── Responsive ── */
+.storage-stat-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.storage-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.storage-bar {
+    flex: 1;
+    height: 12px;
+    background: var(--bg-input);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Overall disk-used fill (sits underneath the downloads layer) */
+.storage-bar-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    background: #60a5fa;
+    border-radius: 6px;
+    transition: width 0.4s ease;
+}
+
+.storage-bar-fill.storage-bar-warn {
+    background: var(--warning);
+}
+
+.storage-bar-fill.storage-bar-crit {
+    background: var(--error);
+}
+
+/* Downloads-attributable slice — overlaid on top of the used fill */
+.storage-bar-downloads {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 6px;
+    transition: width 0.4s ease;
+    opacity: 0.85;
+}
+
+.storage-bar-pct {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    min-width: 45px;
+    text-align: right;
+}
+
+.storage-legend {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.storage-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.legend-dot-used { background: #60a5fa; }
+.legend-dot-downloads { background: var(--accent); }
+.legend-dot-free { background: var(--bg-input); border: 1px solid var(--border); }
+
+/* Responsive */
 @media (max-width: 768px) {
     .navbar {
         flex-direction: column;
@@ -1132,6 +1292,21 @@ input.readonly {
         flex-direction: column;
         gap: 1rem;
         align-items: flex-start;
+    }
+
+    .storage-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .storage-path {
+        max-width: 100%;
+    }
+
+    .storage-stats {
+        flex-wrap: wrap;
+        gap: 1rem;
     }
 
     .download-item {
