@@ -941,3 +941,66 @@ input.readonly {
         grid-template-columns: 1fr;
     }
 }
+
+/* Import / Export Section */
+.import-export-section {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.import-export-group {
+    flex: 1;
+    min-width: 280px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+}
+
+.import-export-group h2 {
+    margin-top: 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.import-export-desc {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    margin-bottom: 0.75rem;
+}
+
+.import-export-buttons {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.import-file-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.875rem;
+    padding: 0.375rem 0.5rem;
+}
+
+.import-result {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.import-result-success {
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid var(--success);
+    color: var(--success);
+}
+
+.import-result-error {
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid var(--error);
+    color: var(--error);
+}

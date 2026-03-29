@@ -1,6 +1,9 @@
 """Flask routes for the web UI and API."""
 
+import io
+import json
 import os
+import xml.etree.ElementTree as ET
 from flask import Blueprint, render_template, request, jsonify, current_app, send_file, abort, session, redirect, url_for
 from .models import db, Channel, Video, DownloadLog
 from .downloader import VideoDownloader
@@ -524,4 +527,217 @@ def api_set_clip(video_id):
         'message': 'Clip timestamps set',
         'clip_start': video.clip_start,
         'clip_end': video.clip_end,
+    })
+
+
+# ==================== Import / Export API ====================
+
+@bp.route('/api/channels/export', methods=['GET'])
+def api_channels_export():
+    """Export all channels as JSON or OPML.
+
+    Query params:
+        format: 'json' (default) or 'opml'
+    """
+    fmt = request.args.get('format', 'json').lower()
+    channels = Channel.query.order_by(Channel.name).all()
+
+    if fmt == 'opml':
+        # Build OPML XML document
+        opml = ET.Element('opml', version='2.0')
+
+        head = ET.SubElement(opml, 'head')
+        title_el = ET.SubElement(head, 'title')
+        title_el.text = 'Rumble Downloader Channel Subscriptions'
+
+        body = ET.SubElement(opml, 'body')
+        for ch in channels:
+            attrs = {
+                'text': ch.name,
+                'type': 'rss',
+                'xmlUrl': ch.url,
+                'platform': ch.platform,
+                'quality': ch.quality or '1080',
+                'audio_only': 'true' if ch.audio_only else 'false',
+                'download_clips': 'true' if ch.download_clips else 'false',
+                'clip_threshold_seconds': str(ch.clip_threshold_seconds or 300),
+                'check_interval_hours': str(ch.check_interval_hours or 6),
+                'enabled': 'true' if ch.enabled else 'false',
+                'backfill_limit': str(ch.backfill_limit or 50),
+            }
+            ET.SubElement(body, 'outline', **attrs)
+
+        xml_bytes = ET.tostring(opml, encoding='unicode', xml_declaration=False)
+        xml_output = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
+
+        return current_app.response_class(
+            xml_output,
+            mimetype='text/x-opml',
+            headers={
+                'Content-Disposition': 'attachment; filename="channels.opml"',
+            }
+        )
+
+    else:
+        # JSON export — include all configurable settings
+        export_data = []
+        for ch in channels:
+            export_data.append({
+                'name': ch.name,
+                'url': ch.url,
+                'platform': ch.platform,
+                'quality': ch.quality,
+                'audio_only': ch.audio_only,
+                'download_clips': ch.download_clips,
+                'clip_threshold_seconds': ch.clip_threshold_seconds,
+                'check_interval_hours': ch.check_interval_hours,
+                'enabled': ch.enabled,
+                'backfill_limit': ch.backfill_limit,
+            })
+
+        json_bytes = json.dumps(export_data, indent=2).encode('utf-8')
+        return current_app.response_class(
+            json_bytes,
+            mimetype='application/json',
+            headers={
+                'Content-Disposition': 'attachment; filename="channels.json"',
+            }
+        )
+
+
+@bp.route('/api/channels/import', methods=['POST'])
+def api_channels_import():
+    """Import channels from a JSON or OPML file upload.
+
+    Accepts multipart/form-data with a 'file' field.
+    Auto-detects format from file content.
+    Skips channels whose URL already exists (duplicate detection).
+
+    Returns a summary: imported, skipped, errors.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    upload = request.files['file']
+    if not upload.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    try:
+        raw = upload.read().decode('utf-8').strip()
+    except UnicodeDecodeError:
+        return jsonify({'error': 'File must be UTF-8 encoded text'}), 400
+
+    # Auto-detect format: XML starts with '<', otherwise try JSON
+    channels_data = []
+    parse_errors = []
+
+    if raw.startswith('<'):
+        # Parse OPML
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError as exc:
+            return jsonify({'error': f'Invalid XML: {exc}'}), 400
+
+        body = root.find('body')
+        if body is None:
+            return jsonify({'error': 'OPML missing <body> element'}), 400
+
+        for outline in body.findall('outline'):
+            url = outline.get('xmlUrl') or outline.get('url')
+            name = outline.get('text') or outline.get('title')
+            if not url:
+                parse_errors.append(f'Outline "{name or "unknown"}" missing xmlUrl, skipped')
+                continue
+
+            def _bool(val, default=False):
+                if val is None:
+                    return default
+                return val.lower() == 'true'
+
+            def _int(val, default=0):
+                try:
+                    return int(val) if val is not None else default
+                except ValueError:
+                    return default
+
+            channels_data.append({
+                'name': name or url,
+                'url': url,
+                'platform': outline.get('platform', 'rumble'),
+                'quality': outline.get('quality', '1080'),
+                'audio_only': _bool(outline.get('audio_only'), False),
+                'download_clips': _bool(outline.get('download_clips'), False),
+                'clip_threshold_seconds': _int(outline.get('clip_threshold_seconds'), 300),
+                'check_interval_hours': _int(outline.get('check_interval_hours'), 6),
+                'enabled': _bool(outline.get('enabled'), True),
+                'backfill_limit': _int(outline.get('backfill_limit'), 50),
+            })
+    else:
+        # Parse JSON
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return jsonify({'error': f'Invalid JSON: {exc}'}), 400
+
+        if not isinstance(parsed, list):
+            return jsonify({'error': 'JSON must be an array of channel objects'}), 400
+
+        for i, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                parse_errors.append(f'Item {i} is not an object, skipped')
+                continue
+            url = item.get('url')
+            if not url:
+                parse_errors.append(f'Item {i} missing url, skipped')
+                continue
+            channels_data.append({
+                'name': item.get('name') or url,
+                'url': url,
+                'platform': item.get('platform', 'rumble'),
+                'quality': item.get('quality', '1080'),
+                'audio_only': bool(item.get('audio_only', False)),
+                'download_clips': bool(item.get('download_clips', False)),
+                'clip_threshold_seconds': int(item.get('clip_threshold_seconds', 300)),
+                'check_interval_hours': int(item.get('check_interval_hours', 6)),
+                'enabled': bool(item.get('enabled', True)),
+                'backfill_limit': int(item.get('backfill_limit', 50)),
+            })
+
+    imported = 0
+    skipped = 0
+    import_errors = list(parse_errors)
+
+    for entry in channels_data:
+        existing = Channel.query.filter_by(url=entry['url']).first()
+        if existing:
+            skipped += 1
+            continue
+        try:
+            channel = Channel(
+                name=entry['name'],
+                url=entry['url'],
+                platform=entry['platform'],
+                quality=entry['quality'],
+                audio_only=entry['audio_only'],
+                download_clips=entry['download_clips'],
+                clip_threshold_seconds=entry['clip_threshold_seconds'],
+                check_interval_hours=entry['check_interval_hours'],
+                enabled=entry['enabled'],
+                backfill_limit=entry['backfill_limit'],
+            )
+            db.session.add(channel)
+            db.session.flush()  # catch constraint errors before commit
+            imported += 1
+        except Exception as exc:
+            db.session.rollback()
+            import_errors.append(f'Failed to import "{entry["name"]}": {exc}')
+            continue
+
+    db.session.commit()
+
+    return jsonify({
+        'imported': imported,
+        'skipped': skipped,
+        'errors': import_errors,
+        'message': f'Import complete: {imported} imported, {skipped} skipped, {len(import_errors)} errors',
     })

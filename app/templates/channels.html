@@ -5,6 +5,27 @@
 {% block content %}
 <h1>Channels</h1>
 
+<div class="import-export-section">
+    <div class="import-export-group">
+        <h2>Export Subscriptions</h2>
+        <p class="import-export-desc">Download your channel list to back it up or move it to another instance.</p>
+        <div class="import-export-buttons">
+            <a href="/api/channels/export?format=json" class="btn btn-secondary" download="channels.json">Export JSON</a>
+            <a href="/api/channels/export?format=opml" class="btn btn-secondary" download="channels.opml">Export OPML</a>
+        </div>
+    </div>
+
+    <div class="import-export-group">
+        <h2>Import Subscriptions</h2>
+        <p class="import-export-desc">Import channels from a JSON or OPML file. Duplicate URLs will be skipped.</p>
+        <div class="form-row">
+            <input type="file" id="importFile" accept=".json,.opml,.xml" class="import-file-input">
+            <button class="btn btn-primary" onclick="importChannels()">Import</button>
+        </div>
+        <div id="importResult" class="import-result" style="display:none;"></div>
+    </div>
+</div>
+
 <div class="channels-grid">
     {% for channel in channels %}
     <div class="channel-card" data-id="{{ channel.id }}">
@@ -92,6 +113,46 @@ async function deleteChannel(id, name) {
         location.reload();
     } catch (e) {
         alert('Error: ' + e.message);
+    }
+}
+
+async function importChannels() {
+    const fileInput = document.getElementById('importFile');
+    const resultBox = document.getElementById('importResult');
+
+    if (!fileInput.files.length) {
+        resultBox.style.display = 'block';
+        resultBox.className = 'import-result import-result-error';
+        resultBox.textContent = 'Please select a file first.';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    try {
+        const resp = await fetch('/api/channels/import', {method: 'POST', body: formData});
+        const data = await resp.json();
+
+        resultBox.style.display = 'block';
+        if (resp.ok) {
+            resultBox.className = 'import-result import-result-success';
+            let msg = data.message;
+            if (data.errors && data.errors.length) {
+                msg += '\n\nErrors:\n' + data.errors.join('\n');
+            }
+            resultBox.textContent = msg;
+            if (data.imported > 0) {
+                setTimeout(() => location.reload(), 1500);
+            }
+        } else {
+            resultBox.className = 'import-result import-result-error';
+            resultBox.textContent = data.error || 'Import failed.';
+        }
+    } catch (e) {
+        resultBox.style.display = 'block';
+        resultBox.className = 'import-result import-result-error';
+        resultBox.textContent = 'Network error: ' + e.message;
     }
 }
 </script>
