@@ -1,10 +1,12 @@
 """Background scheduler for channel checking and video downloading."""
 
 import fcntl
+import json
 import logging
+import queue
 from datetime import datetime, timedelta
 from threading import Thread, Event, Lock
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -16,6 +18,45 @@ from .rumble_extractor import RumbleExtractor
 from .notifications import NotificationManager
 
 logger = logging.getLogger(__name__)
+
+# ==================== Module-Level Event Bus ====================
+# A list of per-client queues.  Each SSE connection appends its own queue
+# here so it receives every event published by scheduler threads.
+
+_subscribers: List[queue.Queue] = []
+_subscribers_lock = Lock()
+
+
+def subscribe() -> queue.Queue:
+    """Register a new SSE client and return its dedicated queue."""
+    q: queue.Queue = queue.Queue(maxsize=100)
+    with _subscribers_lock:
+        _subscribers.append(q)
+    return q
+
+
+def unsubscribe(q: queue.Queue) -> None:
+    """Remove a client queue when the SSE connection closes."""
+    with _subscribers_lock:
+        try:
+            _subscribers.remove(q)
+        except ValueError:
+            pass
+
+
+def publish_event(event_type: str, data: dict) -> None:
+    """Publish an event to all connected SSE clients (non-blocking)."""
+    payload = json.dumps({'type': event_type, **data})
+    with _subscribers_lock:
+        dead: List[queue.Queue] = []
+        for q in _subscribers:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                # Slow / stale client — drop and clean up
+                dead.append(q)
+        for q in dead:
+            _subscribers.remove(q)
 
 
 class DownloadCancelled(Exception):
@@ -471,6 +512,13 @@ class DownloadScheduler:
 
                 logger.info(f'Started concurrent download for video {video.id}: {video.title}')
 
+                # Notify SSE clients that the queue changed
+                publish_event('queue_update', {
+                    'video_id': video.id,
+                    'title': video.title,
+                    'action': 'started',
+                })
+
     def _download_video_thread(self, video_id: int, cancel_event: Event):
         """Thread wrapper for downloading a video with proper app context."""
         try:
@@ -502,7 +550,7 @@ class DownloadScheduler:
         db.session.commit()
 
         def progress_hook(d):
-            """Progress hook that checks for cancellation."""
+            """Progress hook that checks for cancellation and publishes SSE events."""
             # Check for cancellation
             if cancel_event.is_set():
                 raise DownloadCancelled(f"Download cancelled for video {video.id}")
@@ -516,7 +564,7 @@ class DownloadScheduler:
                         percent = (downloaded / total * 100) if total > 0 else 0
                         speed = d.get('speed', 0)
                         eta = d.get('eta', 0)
-                        self._active_downloads[video.id]['progress'] = {
+                        progress = {
                             'status': 'downloading',
                             'percent': round(percent, 1),
                             'downloaded': downloaded,
@@ -524,11 +572,30 @@ class DownloadScheduler:
                             'speed': speed,
                             'eta': eta,
                         }
+                        self._active_downloads[video.id]['progress'] = progress
+
+                        # Publish SSE progress event
+                        publish_event('download_progress', {
+                            'video_id': video.id,
+                            'title': video.title,
+                            'filename': d.get('filename', ''),
+                            **progress,
+                        })
+
                     elif d['status'] == 'finished':
-                        self._active_downloads[video.id]['progress'] = {
+                        progress = {
                             'status': 'processing',
                             'percent': 100,
                         }
+                        self._active_downloads[video.id]['progress'] = progress
+
+                        # Publish SSE progress event for processing phase
+                        publish_event('download_progress', {
+                            'video_id': video.id,
+                            'title': video.title,
+                            'filename': d.get('filename', ''),
+                            **progress,
+                        })
 
         try:
             result = self.downloader.download_video(
@@ -556,6 +623,15 @@ class DownloadScheduler:
                     file_size=result['file_size'],
                     duration=video.duration
                 )
+
+                # Publish SSE completion event
+                publish_event('download_complete', {
+                    'video_id': video.id,
+                    'title': video.title,
+                    'channel': channel.name,
+                    'file_size': result['file_size'],
+                    'file_path': result['file_path'],
+                })
             else:
                 video.status = 'failed'
                 video.error_message = result['error']
@@ -567,7 +643,20 @@ class DownloadScheduler:
                     video.title, channel.name, result['error']
                 )
 
+                # Publish SSE failure event
+                publish_event('download_failed', {
+                    'video_id': video.id,
+                    'title': video.title,
+                    'channel': channel.name,
+                    'error': result['error'],
+                })
+
             db.session.commit()
+
+            # Publish queue update so clients refresh pending counts
+            publish_event('queue_update', {
+                'active_count': len(self._active_downloads) - 1,  # this slot is about to free
+            })
 
         except DownloadCancelled:
             video.status = 'pending'  # Back to pending so it can be retried
@@ -578,6 +667,11 @@ class DownloadScheduler:
                            f'Download cancelled: {video.title}')
             logger.info(f'Download cancelled for video {video.id}')
 
+            publish_event('queue_update', {
+                'video_id': video.id,
+                'cancelled': True,
+            })
+
         except Exception as e:
             video.status = 'failed'
             video.error_message = str(e)
@@ -585,6 +679,12 @@ class DownloadScheduler:
 
             self._log_action(channel.id, video.id, 'error',
                            f'Download exception: {e}')
+
+            publish_event('download_failed', {
+                'video_id': video.id,
+                'title': video.title,
+                'error': str(e),
+            })
 
         finally:
             # Remove from active downloads

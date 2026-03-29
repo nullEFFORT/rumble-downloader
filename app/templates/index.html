@@ -17,8 +17,47 @@
     <div class="queue-status">
         <span id="queue-status-text">Loading...</span>
         <span id="pending-count"></span>
+        <span id="sse-indicator" class="sse-indicator sse-connecting" title="Real-time connection status"></span>
     </div>
     <div id="active-downloads" class="active-downloads"></div>
+</section>
+
+<!-- Storage Dashboard -->
+<section class="storage-card" id="storage-panel">
+    <div class="storage-header">
+        <h2>Storage</h2>
+        <span id="storage-path" class="storage-path"></span>
+    </div>
+    <div class="storage-stats">
+        <div class="storage-stat">
+            <span class="storage-stat-label">Total</span>
+            <span class="storage-stat-value" id="storage-total">--</span>
+        </div>
+        <div class="storage-stat">
+            <span class="storage-stat-label">Used</span>
+            <span class="storage-stat-value" id="storage-used">--</span>
+        </div>
+        <div class="storage-stat">
+            <span class="storage-stat-label">Free</span>
+            <span class="storage-stat-value" id="storage-free">--</span>
+        </div>
+        <div class="storage-stat">
+            <span class="storage-stat-label">Downloads</span>
+            <span class="storage-stat-value" id="storage-downloads">--</span>
+        </div>
+    </div>
+    <div class="storage-bar-wrap">
+        <div class="storage-bar">
+            <div class="storage-bar-fill" id="storage-bar-fill" style="width: 0%"></div>
+            <div class="storage-bar-downloads" id="storage-bar-downloads" style="width: 0%"></div>
+        </div>
+        <span class="storage-bar-pct" id="storage-bar-pct">0%</span>
+    </div>
+    <div class="storage-legend">
+        <span class="storage-legend-item"><span class="legend-dot legend-dot-used"></span>Disk used</span>
+        <span class="storage-legend-item"><span class="legend-dot legend-dot-downloads"></span>Your downloads</span>
+        <span class="storage-legend-item"><span class="legend-dot legend-dot-free"></span>Free</span>
+    </div>
 </section>
 
 <section class="stats-grid">
@@ -239,9 +278,129 @@ async function checkChannel(id) {
     }
 }
 
-// Queue Control Functions
+// ============================================================
+// Queue Control + Real-time SSE
+// ============================================================
+
 let queuePaused = false;
 
+// --- SSE Connection ---
+let _sseSource = null;
+let _sseFallbackTimer = null;
+const SSE_FALLBACK_INTERVAL = 5000; // ms between poll cycles when SSE is down
+
+function setSseIndicator(state) {
+    // state: 'connected' | 'connecting' | 'fallback'
+    const el = document.getElementById('sse-indicator');
+    if (!el) return;
+    el.className = 'sse-indicator sse-' + state;
+    el.title = state === 'connected'
+        ? 'Live updates active'
+        : state === 'fallback'
+            ? 'Using polling fallback'
+            : 'Connecting...';
+}
+
+function startSse() {
+    if (_sseSource) {
+        _sseSource.close();
+        _sseSource = null;
+    }
+    setSseIndicator('connecting');
+
+    const source = new EventSource('/api/events');
+    _sseSource = source;
+
+    source.addEventListener('heartbeat', () => {
+        setSseIndicator('connected');
+        // SSE is live — clear any polling fallback
+        if (_sseFallbackTimer) {
+            clearInterval(_sseFallbackTimer);
+            _sseFallbackTimer = null;
+        }
+    });
+
+    source.addEventListener('download_progress', e => {
+        const d = JSON.parse(e.data);
+        updateDownloadItem(d);
+    });
+
+    source.addEventListener('download_complete', e => {
+        const d = JSON.parse(e.data);
+        removeDownloadItem(d.video_id);
+        updateQueueStatus(); // full refresh to get updated counts
+        updateStorageDisplay();
+    });
+
+    source.addEventListener('download_failed', e => {
+        const d = JSON.parse(e.data);
+        removeDownloadItem(d.video_id);
+        updateQueueStatus();
+    });
+
+    source.addEventListener('queue_update', () => {
+        updateQueueStatus();
+    });
+
+    source.onerror = () => {
+        setSseIndicator('fallback');
+        source.close();
+        _sseSource = null;
+        // Fall back to polling until SSE recovers
+        if (!_sseFallbackTimer) {
+            updateQueueStatus();
+            _sseFallbackTimer = setInterval(updateQueueStatus, SSE_FALLBACK_INTERVAL);
+        }
+        // Try to reconnect after 10 s
+        setTimeout(startSse, 10000);
+    };
+}
+
+// --- Download item helpers ---
+// Keep a per-video-id progress map so we can update individual items in place
+const _activeItems = {};  // video_id -> { title, percent, speed, eta, status }
+
+function updateDownloadItem(d) {
+    _activeItems[d.video_id] = d;
+    renderActiveDownloads();
+}
+
+function removeDownloadItem(videoId) {
+    delete _activeItems[videoId];
+    renderActiveDownloads();
+}
+
+function renderActiveDownloads() {
+    const container = document.getElementById('active-downloads');
+    const items = Object.values(_activeItems);
+    if (items.length === 0) {
+        container.innerHTML = '<p class="no-downloads">No active downloads</p>';
+        return;
+    }
+    container.innerHTML = items.map(dl => {
+        const percent = dl.percent || 0;
+        const speed = dl.speed ? formatSpeed(dl.speed) : '--';
+        const eta = dl.eta ? formatEta(dl.eta) : '--';
+        const statusLabel = dl.status === 'processing' ? 'Processing...' : `${speed} - ETA: ${eta}`;
+        return `
+            <div class="download-item" id="dl-item-${dl.video_id}">
+                <div class="download-info">
+                    <span class="download-title">${dl.title || 'Video #' + dl.video_id}</span>
+                    <span class="download-stats">${statusLabel}</span>
+                </div>
+                <div class="download-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${percent}%"></div>
+                    </div>
+                    <span class="progress-text">${percent.toFixed(1)}%</span>
+                </div>
+                <button class="btn btn-sm btn-danger" onclick="cancelDownload(${dl.video_id})">Cancel</button>
+            </div>
+        `;
+    }).join('');
+}
+
+// --- Full queue status poll (used on load and as SSE fallback) ---
 async function updateQueueStatus() {
     try {
         const response = await fetch('/api/queue/status');
@@ -249,54 +408,80 @@ async function updateQueueStatus() {
 
         queuePaused = data.paused;
 
-        // Update pause button
         const pauseBtn = document.getElementById('pause-btn');
         pauseBtn.textContent = data.paused ? 'Resume' : 'Pause';
         pauseBtn.className = data.paused ? 'btn btn-success' : 'btn btn-warning';
 
-        // Update status text
         const statusText = document.getElementById('queue-status-text');
         if (data.paused) {
-            statusText.innerHTML = '<span class="status-paused">⏸ Queue Paused</span>';
+            statusText.innerHTML = '<span class="status-paused">&#9646;&#9646; Queue Paused</span>';
         } else if (data.active_count > 0) {
-            statusText.innerHTML = '<span class="status-active">▶ Downloading...</span>';
+            statusText.innerHTML = '<span class="status-active">&#9654; Downloading...</span>';
         } else {
-            statusText.innerHTML = '<span class="status-idle">● Idle</span>';
+            statusText.innerHTML = '<span class="status-idle">&#9679; Idle</span>';
         }
 
-        // Update pending count
         document.getElementById('pending-count').textContent = `${data.pending_count} pending`;
 
-        // Update active downloads
-        const container = document.getElementById('active-downloads');
-        if (data.active_downloads.length === 0) {
-            container.innerHTML = '<p class="no-downloads">No active downloads</p>';
-        } else {
-            container.innerHTML = data.active_downloads.map(dl => {
-                const progress = dl.progress || {};
-                const percent = progress.percent || 0;
-                const speed = progress.speed ? formatSpeed(progress.speed) : '--';
-                const eta = progress.eta ? formatEta(progress.eta) : '--';
+        // Merge server state into our local map (preserves SSE-delivered granular progress)
+        const serverIds = new Set(data.active_downloads.map(dl => dl.video_id));
 
-                return `
-                    <div class="download-item">
-                        <div class="download-info">
-                            <span class="download-title">${dl.title || 'Video #' + dl.video_id}</span>
-                            <span class="download-stats">${speed} - ETA: ${eta}</span>
-                        </div>
-                        <div class="download-progress">
-                            <div class="progress-bar">
-                                <div class="progress-fill" style="width: ${percent}%"></div>
-                            </div>
-                            <span class="progress-text">${percent.toFixed(1)}%</span>
-                        </div>
-                        <button class="btn btn-sm btn-danger" onclick="cancelDownload(${dl.video_id})">Cancel</button>
-                    </div>
-                `;
-            }).join('');
+        // Remove items the server no longer considers active
+        for (const id of Object.keys(_activeItems)) {
+            if (!serverIds.has(Number(id))) delete _activeItems[id];
         }
+
+        // Add/update items from server (but don't overwrite richer SSE data)
+        for (const dl of data.active_downloads) {
+            if (!_activeItems[dl.video_id]) {
+                _activeItems[dl.video_id] = {
+                    video_id: dl.video_id,
+                    title: dl.title,
+                    ...(dl.progress || {}),
+                };
+            }
+        }
+
+        renderActiveDownloads();
     } catch (e) {
         console.error('Error updating queue status:', e);
+    }
+}
+
+// --- Storage ---
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+}
+
+async function updateStorageDisplay() {
+    try {
+        const res = await fetch('/api/storage');
+        const d = await res.json();
+
+        document.getElementById('storage-total').textContent = formatBytes(d.disk_total);
+        document.getElementById('storage-used').textContent = formatBytes(d.disk_used);
+        document.getElementById('storage-free').textContent = formatBytes(d.disk_free);
+        document.getElementById('storage-downloads').textContent = formatBytes(d.download_total);
+        document.getElementById('storage-path').textContent = d.download_path || '';
+
+        const usedPct = d.disk_used_pct || 0;
+        const dlPct = d.disk_total > 0
+            ? Math.min((d.download_total / d.disk_total) * 100, usedPct)
+            : 0;
+
+        document.getElementById('storage-bar-fill').style.width = usedPct + '%';
+        document.getElementById('storage-bar-downloads').style.width = dlPct.toFixed(1) + '%';
+        document.getElementById('storage-bar-pct').textContent = usedPct.toFixed(1) + '%';
+
+        // Color the bar red when nearly full
+        const fill = document.getElementById('storage-bar-fill');
+        fill.classList.toggle('storage-bar-warn', usedPct >= 80);
+        fill.classList.toggle('storage-bar-crit', usedPct >= 95);
+    } catch (e) {
+        console.error('Error updating storage:', e);
     }
 }
 
@@ -345,8 +530,14 @@ async function cancelAllDownloads() {
     }
 }
 
-// Update queue status every 2 seconds
+// Initial load
 updateQueueStatus();
-setInterval(updateQueueStatus, 2000);
+updateStorageDisplay();
+
+// Start SSE (primary real-time channel)
+startSse();
+
+// Refresh storage every 60 s regardless of SSE (file sizes change after completion)
+setInterval(updateStorageDisplay, 60000);
 </script>
 {% endblock %}

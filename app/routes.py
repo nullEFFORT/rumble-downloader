@@ -3,8 +3,11 @@
 import io
 import json
 import os
+import shutil
+import time
 import xml.etree.ElementTree as ET
-from flask import Blueprint, render_template, request, jsonify, current_app, send_file, abort, session, redirect, url_for
+from flask import Blueprint, render_template, request, jsonify, current_app, send_file, abort, session, redirect, url_for, Response
+from sqlalchemy import func
 from .models import db, Channel, Video, DownloadLog
 from .downloader import VideoDownloader
 from .auth import is_auth_enabled
@@ -833,4 +836,91 @@ def api_channels_import():
         'skipped': skipped,
         'errors': import_errors,
         'message': f'Import complete: {imported} imported, {skipped} skipped, {len(import_errors)} errors',
+    })
+
+
+# ==================== Real-time Events (SSE) ====================
+
+@bp.route('/api/events')
+def api_events():
+    """Server-Sent Events endpoint for real-time download progress.
+
+    Clients connect with EventSource('/api/events') and receive JSON events
+    of the following types:
+      - download_progress  {video_id, title, filename, percent, speed, eta, status}
+      - download_complete  {video_id, title, channel, file_size, file_path}
+      - download_failed    {video_id, title, channel, error}
+      - queue_update       {video_id?, title?, action?, active_count?, cancelled?}
+      - heartbeat          {ts}  (sent every 15 s to keep the connection alive)
+    """
+    from .scheduler import subscribe, unsubscribe
+
+    def generate():
+        client_queue = subscribe()
+        try:
+            # Send an initial heartbeat so the client knows the connection is live
+            yield f"event: heartbeat\ndata: {json.dumps({'ts': time.time()})}\n\n"
+
+            while True:
+                try:
+                    # Block for up to 15 seconds, then send a heartbeat to prevent
+                    # proxy / browser timeouts.
+                    payload = client_queue.get(timeout=15)
+                    data = json.loads(payload)
+                    event_type = data.pop('type', 'message')
+                    yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+                except Exception:
+                    # Timeout — send heartbeat and loop
+                    yield f"event: heartbeat\ndata: {json.dumps({'ts': time.time()})}\n\n"
+        finally:
+            unsubscribe(client_queue)
+
+    response = Response(generate(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'  # Disable nginx buffering
+    return response
+
+
+# ==================== Storage Dashboard ====================
+
+@bp.route('/api/storage', methods=['GET'])
+def api_storage():
+    """Return disk usage and total downloaded file size.
+
+    Response:
+      {
+        "disk_total": <bytes>,
+        "disk_used":  <bytes>,
+        "disk_free":  <bytes>,
+        "disk_used_pct": <0-100 float>,
+        "download_total": <bytes>,   # sum of Video.file_size for completed videos
+        "download_path": <str>
+      }
+    """
+    download_path = current_app.config.get('DOWNLOAD_PATH', '/downloads')
+
+    try:
+        usage = shutil.disk_usage(download_path)
+        disk_total = usage.total
+        disk_used = usage.used
+        disk_free = usage.free
+        disk_used_pct = round(disk_used / disk_total * 100, 1) if disk_total > 0 else 0
+    except OSError:
+        disk_total = disk_used = disk_free = 0
+        disk_used_pct = 0
+
+    # Sum file_size for all completed videos (file_size may be None for some rows)
+    result = db.session.query(func.sum(Video.file_size)).filter(
+        Video.status == 'completed',
+        Video.file_size.isnot(None),
+    ).scalar()
+    download_total = result or 0
+
+    return jsonify({
+        'disk_total': disk_total,
+        'disk_used': disk_used,
+        'disk_free': disk_free,
+        'disk_used_pct': disk_used_pct,
+        'download_total': download_total,
+        'download_path': download_path,
     })

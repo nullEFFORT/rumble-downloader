@@ -1,30 +1,36 @@
 // Video Downloader Frontend JS
 
-// Auto-refresh stats every 30 seconds on dashboard
+// Refresh stat cards by polling /api/stats.
+// On the dashboard, the SSE connection (see index.html) provides real-time
+// download progress.  Stats (video counts) are refreshed here on a slower
+// cadence as a lightweight supplement — SSE completion events also trigger
+// updateQueueStatus() which pulls fresh counts via /api/queue/status.
+async function refreshStatCards() {
+    try {
+        const response = await fetch('/api/stats');
+        const stats = await response.json();
+
+        const cards = document.querySelectorAll('.stat-card');
+        cards.forEach(card => {
+            const label = card.querySelector('.stat-label')?.textContent.toLowerCase();
+            const value = card.querySelector('.stat-value');
+            if (!label || !value) return;
+
+            if (label.includes('pending')) value.textContent = stats.pending_videos;
+            else if (label.includes('downloaded')) value.textContent = stats.completed_videos;
+            else if (label.includes('failed')) value.textContent = stats.failed_videos;
+            else if (label.includes('total channels')) value.textContent = stats.total_channels;
+            else if (label.includes('active')) value.textContent = stats.enabled_channels;
+            else if (label.includes('total videos')) value.textContent = stats.total_videos;
+        });
+    } catch (e) {
+        console.error('Failed to refresh stats:', e);
+    }
+}
+
 if (document.querySelector('.stats-grid')) {
-    setInterval(async () => {
-        try {
-            const response = await fetch('/api/stats');
-            const stats = await response.json();
-
-            // Update stat cards if they exist
-            const cards = document.querySelectorAll('.stat-card');
-            cards.forEach(card => {
-                const label = card.querySelector('.stat-label')?.textContent.toLowerCase();
-                const value = card.querySelector('.stat-value');
-                if (!label || !value) return;
-
-                if (label.includes('pending')) value.textContent = stats.pending_videos;
-                else if (label.includes('downloaded')) value.textContent = stats.completed_videos;
-                else if (label.includes('failed')) value.textContent = stats.failed_videos;
-                else if (label.includes('total channels')) value.textContent = stats.total_channels;
-                else if (label.includes('active')) value.textContent = stats.enabled_channels;
-                else if (label.includes('total videos')) value.textContent = stats.total_videos;
-            });
-        } catch (e) {
-            console.error('Failed to refresh stats:', e);
-        }
-    }, 30000);
+    // Refresh every 60 s (SSE events will trigger more targeted updates faster)
+    setInterval(refreshStatCards, 60000);
 }
 
 // Toast notification helper
