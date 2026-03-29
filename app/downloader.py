@@ -114,6 +114,71 @@ class VideoDownloader:
 
         return None
 
+    def _parse_bitchute_url(self, url: str) -> Optional[dict]:
+        """
+        Parse BitChute channel URL directly.
+
+        BitChute URL formats:
+        - Channel: https://www.bitchute.com/channel/channelname/
+        - Profile: https://www.bitchute.com/profile/channelname/
+        """
+        parsed = urlparse(url)
+        if 'bitchute.com' not in parsed.netloc:
+            return None
+
+        path = parsed.path.strip('/')
+        parts = path.split('/')
+
+        if len(parts) >= 2 and parts[0] in ('channel', 'profile'):
+            channel_name = parts[1]
+            channel_url = f"https://www.bitchute.com/channel/{channel_name}/"
+            return {
+                'name': channel_name,
+                'url': channel_url,
+                'platform': 'bitchute',
+                'channel_id': channel_name,
+                'rss_url': None,
+                'thumbnail': None,
+                'video_title': None,
+                'video_id': None,
+                'is_channel_url': True,
+            }
+
+        return None
+
+    def _parse_odysee_url(self, url: str) -> Optional[dict]:
+        """
+        Parse Odysee channel URL directly.
+
+        Odysee URL formats:
+        - Channel: https://odysee.com/@channelname:hash
+        - Channel (no hash): https://odysee.com/@channelname
+        """
+        parsed = urlparse(url)
+        if 'odysee.com' not in parsed.netloc:
+            return None
+
+        path = parsed.path.strip('/')
+        parts = path.split('/')
+
+        if parts and parts[0].startswith('@'):
+            # Strip the claim ID hash if present (e.g. @name:abc123 -> @name)
+            channel_handle = parts[0].split(':')[0]
+            channel_url = f"https://odysee.com/{channel_handle}"
+            return {
+                'name': channel_handle.lstrip('@'),
+                'url': channel_url,
+                'platform': 'odysee',
+                'channel_id': channel_handle,
+                'rss_url': None,
+                'thumbnail': None,
+                'video_title': None,
+                'video_id': None,
+                'is_channel_url': True,
+            }
+
+        return None
+
     def extract_channel_info(self, url: str, timeout_seconds: int = 30) -> Optional[dict]:
         """Extract channel info from a video or channel URL."""
         # Clean the URL first
@@ -124,6 +189,18 @@ class VideoDownloader:
         if rumble_info and rumble_info.get('is_channel_url'):
             logger.info(f"Parsed Rumble channel URL directly: {rumble_info['name']}")
             return rumble_info
+
+        # Try to parse BitChute channel URLs directly
+        bitchute_info = self._parse_bitchute_url(clean_url)
+        if bitchute_info and bitchute_info.get('is_channel_url'):
+            logger.info(f"Parsed BitChute channel URL directly: {bitchute_info['name']}")
+            return bitchute_info
+
+        # Try to parse Odysee channel URLs directly
+        odysee_info = self._parse_odysee_url(clean_url)
+        if odysee_info and odysee_info.get('is_channel_url'):
+            logger.info(f"Parsed Odysee channel URL directly: {odysee_info['name']}")
+            return odysee_info
 
         # For video URLs or YouTube, use yt-dlp with timeout
         opts = self._get_base_opts()
@@ -177,15 +254,23 @@ class VideoDownloader:
             }
         except TimeoutError:
             logger.warning(f'Timeout extracting channel info from {url}')
-            # For Rumble, try to parse the URL directly as fallback
+            # Try direct URL parsing as fallback for supported platforms
             if 'rumble.com' in url:
                 return self._parse_rumble_url(clean_url)
+            if 'bitchute.com' in url:
+                return self._parse_bitchute_url(clean_url)
+            if 'odysee.com' in url:
+                return self._parse_odysee_url(clean_url)
             return None
         except Exception as e:
             logger.error(f'Error extracting channel info from {url}: {e}')
-            # For Rumble, try to parse the URL directly as fallback
+            # Try direct URL parsing as fallback for supported platforms
             if 'rumble.com' in url:
                 return self._parse_rumble_url(clean_url)
+            if 'bitchute.com' in url:
+                return self._parse_bitchute_url(clean_url)
+            if 'odysee.com' in url:
+                return self._parse_odysee_url(clean_url)
             return None
 
     def _detect_platform(self, url: str, info: dict) -> str:
@@ -196,6 +281,10 @@ class VideoDownloader:
             return 'youtube'
         elif 'rumble' in extractor or 'rumble.com' in url:
             return 'rumble'
+        elif 'bitchute' in extractor or 'bitchute.com' in url:
+            return 'bitchute'
+        elif 'odysee' in extractor or 'odysee.com' in url or 'lbry' in extractor:
+            return 'odysee'
         else:
             return extractor or 'unknown'
 
@@ -346,6 +435,10 @@ class VideoDownloader:
                        audio_only: bool = False,
                        clip_start: str = None,
                        clip_end: str = None,
+                       download_subtitles: bool = False,
+                       subtitle_langs: str = 'en',
+                       embed_metadata: bool = False,
+                       save_thumbnail: bool = False,
                        progress_callback: callable = None) -> dict:
         """
         Download a video (or audio-only when audio_only=True).
@@ -413,6 +506,22 @@ class VideoDownloader:
                 # Network optimizations
                 'socket_timeout': 30,
             }
+
+        # --- Subtitle options (issue #17) ---
+        if download_subtitles and not audio_only:
+            langs = [lang.strip() for lang in (subtitle_langs or 'en').split(',') if lang.strip()]
+            opts['writesubtitles'] = True
+            opts['subtitleslangs'] = langs
+            opts['postprocessors'].append({'key': 'FFmpegEmbedSubtitle'})
+
+        # --- Thumbnail options (issue #21) ---
+        if save_thumbnail and not audio_only:
+            opts['writethumbnail'] = True
+            opts['postprocessors'].append({'key': 'EmbedThumbnail'})
+
+        # --- Metadata embedding (issues #17 / #21) ---
+        if embed_metadata:
+            opts['postprocessors'].append({'key': 'FFmpegMetadata'})
 
         # Timestamp clipping via yt-dlp download_ranges
         if clip_start or clip_end:
