@@ -5,17 +5,126 @@
 {% block content %}
 <h1>Download Logs</h1>
 
+{# ── Filter controls ── #}
+<div class="logs-filters">
+    <form method="get" action="/logs" class="logs-filter-form">
+        <div class="filter-group">
+            <label for="actionFilter">Action:</label>
+            <select id="actionFilter" name="action" onchange="this.form.submit()">
+                <option value="all" {% if action_filter == 'all' %}selected{% endif %}>All Actions</option>
+                {% for a in action_types %}
+                <option value="{{ a }}" {% if action_filter == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="filter-group">
+            <label for="dateFrom">From:</label>
+            <input type="date" id="dateFrom" name="date_from" value="{{ date_from }}">
+        </div>
+
+        <div class="filter-group">
+            <label for="dateTo">To:</label>
+            <input type="date" id="dateTo" name="date_to" value="{{ date_to }}">
+        </div>
+
+        <div class="filter-group">
+            <label for="logPerPage">Per page:</label>
+            <select id="logPerPage" name="per_page">
+                {% for n in [25, 50, 100, 200, 500] %}
+                <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ n }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <input type="hidden" name="page" value="1">
+        <button type="submit" class="btn btn-secondary">Apply</button>
+        <a href="/logs" class="btn btn-secondary">Reset</a>
+    </form>
+
+    <div class="pagination-info">
+        {% if pagination.total > 0 %}
+        Showing {{ ((pagination.page - 1) * pagination.per_page) + 1 }}–{{ [pagination.page * pagination.per_page, pagination.total]|min }} of {{ pagination.total }} entries
+        {% else %}
+        No log entries found
+        {% endif %}
+    </div>
+</div>
+
+{# ── Log entries ── #}
 <div class="logs-list">
     {% for log in logs %}
-    <div class="log-entry log-{{ log.action }}">
-        <div class="log-time">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</div>
-        <div class="log-action">
-            <span class="action-badge action-{{ log.action }}">{{ log.action }}</span>
+    <div class="log-entry log-{{ log.action }}" id="log-{{ log.id }}">
+        <div class="log-header" onclick="toggleLogDetails({{ log.id }})">
+            <div class="log-time">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</div>
+            <div class="log-action">
+                <span class="action-badge action-{{ log.action }}">{{ log.action }}</span>
+            </div>
+            <div class="log-message">{{ log.message }}</div>
+            {% if log.details %}
+            <div class="log-expand-toggle">
+                <span class="log-expand-icon" id="log-icon-{{ log.id }}">&#9654; details</span>
+            </div>
+            {% endif %}
         </div>
-        <div class="log-message">{{ log.message }}</div>
+        {% if log.details %}
+        <div class="log-details-panel hidden" id="log-details-{{ log.id }}">
+            <pre class="log-json">{{ log.details | tojson(indent=2) }}</pre>
+        </div>
+        {% endif %}
     </div>
     {% else %}
-    <p class="empty-message">No logs yet.</p>
+    <p class="empty-message">No logs found.</p>
     {% endfor %}
 </div>
+
+{# ── Pagination ── #}
+{% if pagination.pages > 1 %}
+<div class="pagination-controls">
+    <div class="pagination-left">
+        {% if pagination.has_prev %}
+        <a href="/logs?action={{ action_filter }}&date_from={{ date_from }}&date_to={{ date_to }}&per_page={{ per_page }}&page={{ pagination.prev_num }}"
+           class="btn btn-secondary btn-sm">&laquo; Prev</a>
+        {% else %}
+        <span class="btn btn-secondary btn-sm disabled">&laquo; Prev</span>
+        {% endif %}
+
+        {% for p in pagination.iter_pages(left_edge=2, left_current=2, right_current=2, right_edge=2) %}
+            {% if p %}
+            <a href="/logs?action={{ action_filter }}&date_from={{ date_from }}&date_to={{ date_to }}&per_page={{ per_page }}&page={{ p }}"
+               class="btn btn-sm {% if p == pagination.page %}btn-primary{% else %}btn-secondary{% endif %}">{{ p }}</a>
+            {% else %}
+            <span class="pagination-ellipsis">…</span>
+            {% endif %}
+        {% endfor %}
+
+        {% if pagination.has_next %}
+        <a href="/logs?action={{ action_filter }}&date_from={{ date_from }}&date_to={{ date_to }}&per_page={{ per_page }}&page={{ pagination.next_num }}"
+           class="btn btn-secondary btn-sm">Next &raquo;</a>
+        {% else %}
+        <span class="btn btn-secondary btn-sm disabled">Next &raquo;</span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleLogDetails(logId) {
+    const panel = document.getElementById('log-details-' + logId);
+    const icon = document.getElementById('log-icon-' + logId);
+    if (!panel) return;
+
+    const isHidden = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !isHidden);
+    if (isHidden) {
+        icon.innerHTML = '&#9660; details';
+        icon.classList.add('expanded');
+    } else {
+        icon.innerHTML = '&#9654; details';
+        icon.classList.remove('expanded');
+    }
+}
+</script>
 {% endblock %}
