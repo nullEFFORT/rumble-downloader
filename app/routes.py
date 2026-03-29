@@ -121,6 +121,10 @@ def api_add_channel():
         backfill_limit=data.get('backfill_limit', 50),
         quality=data.get('quality', '1080'),
         audio_only=data.get('audio_only', False),
+        download_subtitles=data.get('download_subtitles', False),
+        subtitle_langs=data.get('subtitle_langs', 'en'),
+        embed_metadata=data.get('embed_metadata', False),
+        save_thumbnail=data.get('save_thumbnail', False),
         check_interval_hours=data.get('check_interval_hours', 6),
     )
 
@@ -151,6 +155,7 @@ def api_update_channel(channel_id):
     # Update allowed fields
     for field in ['name', 'enabled', 'download_clips', 'clip_threshold_seconds',
                   'backfill_enabled', 'backfill_limit', 'quality', 'audio_only',
+                  'download_subtitles', 'subtitle_langs', 'embed_metadata', 'save_thumbnail',
                   'check_interval_hours']:
         if field in data:
             setattr(channel, field, data[field])

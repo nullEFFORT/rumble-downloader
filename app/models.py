@@ -14,7 +14,7 @@ class Channel(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
     url = db.Column(db.String(512), nullable=False, unique=True)
-    platform = db.Column(db.String(50), nullable=False)  # 'youtube' or 'rumble'
+    platform = db.Column(db.String(50), nullable=False)  # 'youtube', 'rumble', 'bitchute', 'odysee'
     channel_id = db.Column(db.String(255))  # YouTube channel ID for RSS
     rss_url = db.Column(db.String(512))  # YouTube RSS feed URL
 
@@ -28,6 +28,14 @@ class Channel(db.Model):
 
     # Download mode
     audio_only = db.Column(db.Boolean, default=False)  # Download audio only (mp3)
+
+    # Subtitle settings (issue #17)
+    download_subtitles = db.Column(db.Boolean, default=False)
+    subtitle_langs = db.Column(db.String(255), default='en')  # Comma-separated, e.g. "en,es"
+
+    # Metadata / thumbnail embedding (issues #17, #21)
+    embed_metadata = db.Column(db.Boolean, default=False)
+    save_thumbnail = db.Column(db.Boolean, default=False)
 
     # Schedule (cron-like)
     check_interval_hours = db.Column(db.Integer, default=6)
@@ -59,6 +67,10 @@ class Channel(db.Model):
             'backfill_limit': self.backfill_limit,
             'quality': self.quality,
             'audio_only': self.audio_only,
+            'download_subtitles': self.download_subtitles,
+            'subtitle_langs': self.subtitle_langs,
+            'embed_metadata': self.embed_metadata,
+            'save_thumbnail': self.save_thumbnail,
             'check_interval_hours': self.check_interval_hours,
             'last_checked': self.last_checked.isoformat() if self.last_checked else None,
             'video_count': self.video_count,
