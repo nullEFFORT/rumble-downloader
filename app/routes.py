@@ -55,22 +55,92 @@ def channel_detail(channel_id):
 
 @bp.route('/videos')
 def videos_list():
-    """List all videos."""
+    """List all videos with pagination and search."""
     status = request.args.get('status', 'all')
+    search = request.args.get('search', '').strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+
+    # Clamp per_page to reasonable values
+    per_page = max(10, min(per_page, 200))
+    page = max(1, page)
+
     query = Video.query
 
     if status != 'all':
         query = query.filter_by(status=status)
 
-    videos = query.order_by(Video.discovered_at.desc()).limit(200).all()
-    return render_template('videos.html', videos=videos, status=status)
+    if search:
+        from .models import Channel as ChannelModel
+        search_term = f'%{search}%'
+        query = query.join(ChannelModel, Video.channel_id == ChannelModel.id).filter(
+            db.or_(
+                Video.title.ilike(search_term),
+                ChannelModel.name.ilike(search_term)
+            )
+        )
+
+    pagination = query.order_by(Video.discovered_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    return render_template(
+        'videos.html',
+        videos=pagination.items,
+        pagination=pagination,
+        status=status,
+        search=search,
+        per_page=per_page,
+    )
 
 
 @bp.route('/logs')
 def logs_list():
-    """View download logs."""
-    logs = DownloadLog.query.order_by(DownloadLog.created_at.desc()).limit(200).all()
-    return render_template('logs.html', logs=logs)
+    """View download logs with action and date-range filters."""
+    action_filter = request.args.get('action', 'all')
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 100, type=int)
+    per_page = max(10, min(per_page, 500))
+    page = max(1, page)
+
+    query = DownloadLog.query
+
+    if action_filter != 'all':
+        query = query.filter_by(action=action_filter)
+
+    if date_from:
+        try:
+            from datetime import datetime as dt
+            query = query.filter(DownloadLog.created_at >= dt.fromisoformat(date_from))
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            from datetime import datetime as dt
+            query = query.filter(DownloadLog.created_at <= dt.fromisoformat(date_to + 'T23:59:59'))
+        except ValueError:
+            pass
+
+    pagination = query.order_by(DownloadLog.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    # Collect distinct action types for the filter dropdown
+    action_types = [r[0] for r in db.session.query(DownloadLog.action).distinct().order_by(DownloadLog.action).all() if r[0]]
+
+    return render_template(
+        'logs.html',
+        logs=pagination.items,
+        pagination=pagination,
+        action_filter=action_filter,
+        action_types=action_types,
+        date_from=date_from,
+        date_to=date_to,
+        per_page=per_page,
+    )
 
 
 # API Routes
@@ -401,6 +471,24 @@ def api_bulk_skip():
     db.session.commit()
 
     return jsonify({'message': f'Skipped {count} videos'})
+
+
+@bp.route('/api/videos/bulk-queue', methods=['POST'])
+def api_bulk_queue():
+    """Queue multiple videos for download (set status to pending)."""
+    data = request.get_json()
+    video_ids = data.get('video_ids', [])
+
+    if not video_ids:
+        return jsonify({'error': 'No video IDs provided'}), 400
+
+    count = Video.query.filter(
+        Video.id.in_(video_ids),
+        Video.status.in_(['skipped', 'failed'])
+    ).update({Video.status: 'pending'}, synchronize_session=False)
+    db.session.commit()
+
+    return jsonify({'message': f'Queued {count} videos for download'})
 
 
 @bp.route('/api/videos/bulk-priority', methods=['POST'])

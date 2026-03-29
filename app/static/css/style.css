@@ -881,7 +881,225 @@ input.readonly {
     border-top: 1px solid var(--border);
 }
 
-/* Responsive */
+/* ── Search bar ── */
+.search-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.search-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+
+.search-input {
+    flex: 1;
+    min-width: 200px;
+    max-width: 420px;
+}
+
+/* ── Pagination controls ── */
+.pagination-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.5rem;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.pagination-left {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.pagination-ellipsis {
+    padding: 0.25rem 0.35rem;
+    color: var(--text-secondary);
+}
+
+.btn.disabled,
+.btn[disabled] {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: default;
+}
+
+.pagination-info {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    white-space: nowrap;
+}
+
+.per-page-selector {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.per-page-selector select {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
+/* ── Bulk toolbar ── */
+.bulk-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--bg-input);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.bulk-count {
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
+    min-width: 90px;
+}
+
+.bulk-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.bulk-priority-group {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+/* ── Checkbox column ── */
+.checkbox-col {
+    width: 36px;
+    text-align: center;
+    padding-left: 0.5rem !important;
+    padding-right: 0 !important;
+}
+
+.video-checkbox,
+#selectAllCheckbox {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+}
+
+/* ── Logs filter controls ── */
+.logs-filters {
+    background: var(--bg-card);
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.logs-filter-form {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.filter-group label {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.filter-group input[type="date"],
+.filter-group select {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+/* ── Log detail panel ── */
+.log-entry {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 0.875rem;
+}
+
+/* Override the original flex row style for the header row */
+.log-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    cursor: default;
+}
+
+.log-entry[class*="log-"] .log-header {
+    /* clickable only when details exist — toggled via JS */
+}
+
+.log-expand-toggle {
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.log-expand-icon {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    cursor: pointer;
+    user-select: none;
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    transition: color 0.15s;
+}
+
+.log-expand-icon:hover,
+.log-expand-icon.expanded {
+    color: var(--accent);
+}
+
+.log-details-panel {
+    border-top: 1px solid var(--border);
+    background: var(--bg-dark);
+    padding: 0;
+}
+
+.log-json {
+    margin: 0;
+    padding: 1rem;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    color: var(--success);
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.5;
+}
+
+/* ── Responsive ── */
 @media (max-width: 768px) {
     .navbar {
         flex-direction: column;

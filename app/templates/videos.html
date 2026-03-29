@@ -5,20 +5,64 @@
 {% block content %}
 <h1>Videos</h1>
 
+{# ── Status filter bar ── #}
 <div class="filter-bar">
-    <a href="/videos?status=all" class="filter-btn {% if status == 'all' %}active{% endif %}">All</a>
-    <a href="/videos?status=pending" class="filter-btn {% if status == 'pending' %}active{% endif %}">Pending</a>
-    <a href="/videos?status=downloading" class="filter-btn {% if status == 'downloading' %}active{% endif %}">Downloading</a>
-    <a href="/videos?status=completed" class="filter-btn {% if status == 'completed' %}active{% endif %}">Completed</a>
-    <a href="/videos?status=failed" class="filter-btn {% if status == 'failed' %}active{% endif %}">Failed</a>
-    <a href="/videos?status=skipped" class="filter-btn {% if status == 'skipped' %}active{% endif %}">Skipped</a>
+    <a href="/videos?status=all{% if search %}&search={{ search|urlencode }}{% endif %}&per_page={{ per_page }}"
+       class="filter-btn {% if status == 'all' %}active{% endif %}">All</a>
+    <a href="/videos?status=pending{% if search %}&search={{ search|urlencode }}{% endif %}&per_page={{ per_page }}"
+       class="filter-btn {% if status == 'pending' %}active{% endif %}">Pending</a>
+    <a href="/videos?status=downloading{% if search %}&search={{ search|urlencode }}{% endif %}&per_page={{ per_page }}"
+       class="filter-btn {% if status == 'downloading' %}active{% endif %}">Downloading</a>
+    <a href="/videos?status=completed{% if search %}&search={{ search|urlencode }}{% endif %}&per_page={{ per_page }}"
+       class="filter-btn {% if status == 'completed' %}active{% endif %}">Completed</a>
+    <a href="/videos?status=failed{% if search %}&search={{ search|urlencode }}{% endif %}&per_page={{ per_page }}"
+       class="filter-btn {% if status == 'failed' %}active{% endif %}">Failed</a>
+    <a href="/videos?status=skipped{% if search %}&search={{ search|urlencode }}{% endif %}&per_page={{ per_page }}"
+       class="filter-btn {% if status == 'skipped' %}active{% endif %}">Skipped</a>
+</div>
+
+{# ── Search bar ── #}
+<div class="search-bar">
+    <form method="get" action="/videos" class="search-form">
+        <input type="hidden" name="status" value="{{ status }}">
+        <input type="hidden" name="per_page" value="{{ per_page }}">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search by title or channel…" class="search-input" autocomplete="off">
+        <button type="submit" class="btn btn-secondary">Search</button>
+        {% if search %}
+        <a href="/videos?status={{ status }}&per_page={{ per_page }}" class="btn btn-secondary">Clear</a>
+        {% endif %}
+    </form>
+    <div class="pagination-info">
+        {% if pagination.total > 0 %}
+        Showing {{ ((pagination.page - 1) * pagination.per_page) + 1 }}–{{ [pagination.page * pagination.per_page, pagination.total]|min }} of {{ pagination.total }} videos
+        {% else %}
+        No videos found
+        {% endif %}
+    </div>
+</div>
+
+{# ── Bulk action toolbar (hidden until selections are made) ── #}
+<div class="bulk-toolbar hidden" id="bulkToolbar">
+    <span class="bulk-count" id="bulkCount">0 selected</span>
+    <div class="bulk-actions">
+        <button class="btn btn-sm btn-secondary" onclick="bulkSkip()">Mark as Skipped</button>
+        <button class="btn btn-sm btn-primary" onclick="bulkQueue()">Queue for Download</button>
+        <div class="bulk-priority-group">
+            <input type="number" id="bulkPriorityInput" value="0" min="-100" max="100" class="priority-input" style="width:70px;">
+            <button class="btn btn-sm btn-secondary" onclick="bulkSetPriority()">Set Priority</button>
+        </div>
+        <button class="btn btn-sm btn-secondary" onclick="clearSelection()">Clear Selection</button>
+    </div>
 </div>
 
 <div class="videos-table">
     <table>
         <thead>
             <tr>
-                <th></th>
+                <th class="checkbox-col">
+                    <input type="checkbox" id="selectAllCheckbox" title="Select all" onchange="toggleSelectAll(this)">
+                </th>
+                <th class="expand-col"></th>
                 <th>Title</th>
                 <th>Channel</th>
                 <th>Duration</th>
@@ -29,6 +73,9 @@
         <tbody>
             {% for video in videos %}
             <tr class="video-row-main" data-id="{{ video.id }}" onclick="toggleVideoDetails({{ video.id }})">
+                <td class="checkbox-col" onclick="event.stopPropagation()">
+                    <input type="checkbox" class="video-checkbox" data-id="{{ video.id }}" onchange="onCheckboxChange()">
+                </td>
                 <td class="expand-toggle">
                     <span class="expand-icon">&#9654;</span>
                 </td>
@@ -64,7 +111,7 @@
                 </td>
             </tr>
             <tr class="video-row-details hidden" id="details-{{ video.id }}">
-                <td colspan="6">
+                <td colspan="7">
                     <div class="video-details-content">
                         <div class="video-thumbnail">
                             {% if video.thumbnail_url %}
@@ -177,16 +224,69 @@
             </tr>
             {% else %}
             <tr>
-                <td colspan="6" class="empty-message">No videos found.</td>
+                <td colspan="7" class="empty-message">No videos found.</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
 </div>
+
+{# ── Pagination controls ── #}
+{% if pagination.pages > 1 %}
+<div class="pagination-controls">
+    <div class="pagination-left">
+        {% if pagination.has_prev %}
+        <a href="/videos?status={{ status }}&page={{ pagination.prev_num }}&per_page={{ per_page }}{% if search %}&search={{ search|urlencode }}{% endif %}"
+           class="btn btn-secondary btn-sm">&laquo; Prev</a>
+        {% else %}
+        <span class="btn btn-secondary btn-sm disabled">&laquo; Prev</span>
+        {% endif %}
+
+        {% for p in pagination.iter_pages(left_edge=2, left_current=2, right_current=2, right_edge=2) %}
+            {% if p %}
+            <a href="/videos?status={{ status }}&page={{ p }}&per_page={{ per_page }}{% if search %}&search={{ search|urlencode }}{% endif %}"
+               class="btn btn-sm {% if p == pagination.page %}btn-primary{% else %}btn-secondary{% endif %}">{{ p }}</a>
+            {% else %}
+            <span class="pagination-ellipsis">…</span>
+            {% endif %}
+        {% endfor %}
+
+        {% if pagination.has_next %}
+        <a href="/videos?status={{ status }}&page={{ pagination.next_num }}&per_page={{ per_page }}{% if search %}&search={{ search|urlencode }}{% endif %}"
+           class="btn btn-secondary btn-sm">Next &raquo;</a>
+        {% else %}
+        <span class="btn btn-secondary btn-sm disabled">Next &raquo;</span>
+        {% endif %}
+    </div>
+
+    <div class="per-page-selector">
+        <label for="perPageSelect">Per page:</label>
+        <select id="perPageSelect" onchange="changePerPage(this.value)">
+            {% for n in [10, 25, 50, 100, 200] %}
+            <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ n }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+{% else %}
+{# Still show per-page selector even on a single page #}
+<div class="pagination-controls">
+    <div class="pagination-left"></div>
+    <div class="per-page-selector">
+        <label for="perPageSelect">Per page:</label>
+        <select id="perPageSelect" onchange="changePerPage(this.value)">
+            {% for n in [10, 25, 50, 100, 200] %}
+            <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ n }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
+// ── Expand/collapse row detail ──────────────────────────────────────────────
 function toggleVideoDetails(videoId) {
     const detailsRow = document.getElementById('details-' + videoId);
     const mainRow = document.querySelector(`tr[data-id="${videoId}"]`);
@@ -195,14 +295,121 @@ function toggleVideoDetails(videoId) {
     if (detailsRow.classList.contains('hidden')) {
         detailsRow.classList.remove('hidden');
         mainRow.classList.add('expanded');
-        expandIcon.innerHTML = '&#9660;'; // down arrow
+        expandIcon.innerHTML = '&#9660;';
     } else {
         detailsRow.classList.add('hidden');
         mainRow.classList.remove('expanded');
-        expandIcon.innerHTML = '&#9654;'; // right arrow
+        expandIcon.innerHTML = '&#9654;';
     }
 }
 
+// ── Per-page selector ───────────────────────────────────────────────────────
+function changePerPage(value) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('per_page', value);
+    url.searchParams.set('page', '1');
+    window.location.href = url.toString();
+}
+
+// ── Bulk selection ──────────────────────────────────────────────────────────
+function getSelectedIds() {
+    return Array.from(document.querySelectorAll('.video-checkbox:checked'))
+        .map(cb => parseInt(cb.dataset.id));
+}
+
+function onCheckboxChange() {
+    const ids = getSelectedIds();
+    const toolbar = document.getElementById('bulkToolbar');
+    const countEl = document.getElementById('bulkCount');
+    const selectAll = document.getElementById('selectAllCheckbox');
+    const allBoxes = document.querySelectorAll('.video-checkbox');
+
+    countEl.textContent = ids.length + ' selected';
+    toolbar.classList.toggle('hidden', ids.length === 0);
+
+    // Update select-all indeterminate state
+    if (ids.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    } else if (ids.length === allBoxes.length) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+    } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
+    }
+}
+
+function toggleSelectAll(cb) {
+    document.querySelectorAll('.video-checkbox').forEach(box => {
+        box.checked = cb.checked;
+    });
+    onCheckboxChange();
+}
+
+function clearSelection() {
+    document.querySelectorAll('.video-checkbox').forEach(box => { box.checked = false; });
+    document.getElementById('selectAllCheckbox').checked = false;
+    document.getElementById('selectAllCheckbox').indeterminate = false;
+    onCheckboxChange();
+}
+
+async function bulkSkip() {
+    const ids = getSelectedIds();
+    if (!ids.length) return;
+    if (!confirm(`Mark ${ids.length} video(s) as skipped?`)) return;
+    try {
+        const res = await fetch('/api/videos/bulk-skip', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({video_ids: ids})
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, res.ok ? 'success' : 'error');
+        if (res.ok) location.reload();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function bulkQueue() {
+    const ids = getSelectedIds();
+    if (!ids.length) return;
+    if (!confirm(`Queue ${ids.length} video(s) for download?`)) return;
+    try {
+        const res = await fetch('/api/videos/bulk-queue', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({video_ids: ids})
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, res.ok ? 'success' : 'error');
+        if (res.ok) location.reload();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function bulkSetPriority() {
+    const ids = getSelectedIds();
+    if (!ids.length) return;
+    const priority = parseInt(document.getElementById('bulkPriorityInput').value) || 0;
+    if (!confirm(`Set priority to ${priority} for ${ids.length} video(s)?`)) return;
+    try {
+        const res = await fetch('/api/videos/bulk-priority', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({video_ids: ids, priority: priority})
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, res.ok ? 'success' : 'error');
+        if (res.ok) location.reload();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+// ── Single video actions ────────────────────────────────────────────────────
 async function downloadVideo(id) {
     try {
         await fetch(`/api/videos/${id}/download`, {method: 'POST'});
@@ -253,12 +460,10 @@ async function setPriority(id, priority) {
 }
 
 function playVideo(id) {
-    // Open the downloaded video file in a new tab for playback
     window.open(`/api/videos/${id}/play`, '_blank');
 }
 
 function openSourceUrl(url) {
-    // Open the source video URL in a new tab
     window.open(url, '_blank');
 }
 
